@@ -667,7 +667,9 @@ def get_reps_from_all(modelDir, dataset, outputDir=None):
             os.makedirs(repDir)
 
         # Check if already done
-        layerRepFiles = glob.glob(os.path.join(repDir, model[0:-3] + "l*"))
+        layerRepFiles = glob.glob(
+            os.path.join(repDir, model.split(".")[0] + "l*")
+        )
         if len(layerRepFiles) == len(outModel.outputs):
             print(
                 "Layer representation files already exists, skipping.",
@@ -679,7 +681,7 @@ def get_reps_from_all(modelDir, dataset, outputDir=None):
 
             # Save each rep with respective layer names
             for i, rep in enumerate(reps):
-                np.save(f"{repDir}/{model[0:-3]}l{i}.npy", rep)
+                np.save(f"{repDir}/{model.split('.')[0]}l{i}.npy", rep)
 
 
 def get_unstruct_model_sims(
