@@ -660,9 +660,9 @@ def get_reps_from_all(modelDir, dataset, outputDir=None):
 
         # Check if representation folder exists, make if not
         if outputDir is None:
-            repDir = f"../outputs/masterOutput/representations/{model[0:-3]}"
+            repDir = f"../outputs/masterOutput/representations/{model.split('.')[0]}"
         else:
-            repDir = os.path.join(outputDir, model[0:-3])
+            repDir = os.path.join(outputDir, model.split(".")[0])
         if not os.path.exists(repDir):
             os.makedirs(repDir)
 
