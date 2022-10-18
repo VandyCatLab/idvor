@@ -649,7 +649,14 @@ def get_reps_from_all(modelDir, dataset, outputDir=None):
         print(f"Working on model: {model}")
         # Create allout model
         modelPath = os.path.join(modelDir, model)
-        outModel = make_allout_model(load_model(modelPath))
+
+        try:
+            outModel = make_allout_model(load_model(modelPath))
+        except OSError as e:
+            print(e)
+            print(f"Trying to load nested model")
+            modelPath = os.path.join(modelPath, model + ".pb")
+            outModel = make_allout_model(load_model(modelPath))
 
         # Check if representation folder exists, make if not
         if outputDir is None:
@@ -1067,7 +1074,7 @@ if __name__ == "__main__":
             return np.sum(centering(L_X) * centering(L_Y))
 
         def linear_CKA(X, Y):
-            """ FROM: https://github.com/yuanli2333/CKA-Centered-Kernel-Alignment"""
+            """FROM: https://github.com/yuanli2333/CKA-Centered-Kernel-Alignment"""
             hsic = linear_HSIC(X, Y)
             var1 = np.sqrt(linear_HSIC(X, X))
             var2 = np.sqrt(linear_HSIC(Y, Y))
