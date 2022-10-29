@@ -571,6 +571,7 @@ def get_funcs(method="all"):
             elif string == "pwcca":
                 preprocFuns.append(preprocess_pwcca)
                 simFuns.append(do_pwcca)
+                analysisNames.append("pwcca")
             elif string == "cka":
                 preprocFuns.append(preprocess_ckaNumba)
                 simFuns.append(do_linearCKANumba2)
