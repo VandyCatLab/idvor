@@ -931,9 +931,7 @@ if __name__ == "__main__":
                 )
 
                 print("Saving results", flush=True)
-                winners.to_csv(
-                    f"../outputs/masterOutput/correspondence/{modelName}Correspondence.csv"
-                )
+                winners.to_csv(fileName)
             else:
                 print("This pair is complete, skipping", flush=True)
 
