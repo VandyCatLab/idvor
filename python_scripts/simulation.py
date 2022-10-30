@@ -428,7 +428,7 @@ def sanity_check(
         )
         permuteData.loc[permute] = list(sims.values())
 
-    permuteData.to_csv(outPath)
+        permuteData.to_csv(outPath)
 
 
 if __name__ == "__main__":
