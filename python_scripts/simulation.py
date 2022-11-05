@@ -351,7 +351,7 @@ def parametricNoise(
             outPath = outputPath
     print("Doing parametric noise simulation")
     for permute in range(permutations):
-        if permute % 100 == 0:
+        if permute % 1 == 0:
             print(f"-- Permutation at {permute}", flush=True)
 
         rep = np.random.choice(rep_flat, size=repShape, replace=False)
