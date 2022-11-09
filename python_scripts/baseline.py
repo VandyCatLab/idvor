@@ -37,6 +37,9 @@ def yield_transforms(
         with multiples of the PCA.
         - 'zoom' yields a number of representations equal to half the smaller
         dimension, zooming into the image.
+        - 'magAux' yields a number a list of four representations equal to
+        the smaller dimension, translating the image in all four directions
+        after reflecting.
     """
 
     def batched_call(model, input, batch_size):
@@ -244,6 +247,49 @@ def yield_transforms(
             else:
                 yield a, rep1, rep2
 
+    elif transform == "maxAug":
+        print(f" - Yielding 1 version.")
+        v = 5
+        print(
+            f"Translating {v} pixels in both directions after horizontal flip.",
+            flush=True,
+        )
+        with tf.device("/cpu:0"):
+            dataset = tf.image.flip_left_right(dataset)
+
+        # Generate transformed imageset
+        with tf.device("/cpu:0"):
+            transImg = tfa.image.translate(dataset, [v, v])
+        rep2 = [batched_call(model, transImg, 512)]
+
+        with tf.device("/cpu:0"):
+            transImg = tfa.image.translate(dataset, [-v, -v])
+        rep2 += [batched_call(model, transImg, 512)]
+
+        with tf.device("/cpu:0"):
+            transImg = tfa.image.translate(dataset, [v, -v])
+        rep2 += [batched_call(model, transImg, 512)]
+
+        with tf.device("/cpu:0"):
+            transImg = tfa.image.translate(dataset, [-v, v])
+        rep2 += [batched_call(model, transImg, 512)]
+
+        if return_aug:
+            # Regenerate translated dataset and concatenate all four directions
+            with tf.device("/cpu:0"):
+                transImg = tf.concat(
+                    [
+                        tfa.image.translate(dataset, [v, v]),
+                        tfa.image.translate(dataset, [-v, -v]),
+                        tfa.image.translate(dataset, [v, -v]),
+                        tfa.image.translate(dataset, [-v, v]),
+                    ],
+                    axis=0,
+                )
+            yield v, rep1, rep2, transImg
+        else:
+            yield v, rep1, rep2
+
 
 def make_dropout_model(model, output_idx, droprate):
     """
@@ -348,6 +394,7 @@ if __name__ == "__main__":
             "dropout",
             "noise",
             "accuracy",
+            "maxAug",
         ],
     )
     parser.add_argument("--model_name", type=str, help="name of model to load")
@@ -514,7 +561,56 @@ if __name__ == "__main__":
                 simDf.to_csv(outPath, index=False)
             else:
                 print(f"{outPath} already exists, skipping.", flush=True)
+    elif args.analysis == "maxAug":
+        for layer in args.layer_index:
+            print(f"Working on layer {layer}.", flush=True)
+            # Get transforms generators
+            transforms = yield_transforms(
+                args.analysis,
+                model,
+                int(layer),
+                dataset,
+                return_aug=False,
+                versions=args.versions,
+                slice=args.version_slice,
+            )
 
+            # Create dataframe
+            simDf = pd.DataFrame(columns=["version"] + analysisNames)
+
+            outPath = os.path.join(
+                basePath,
+                f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+            )
+
+            if not os.path.exists(outPath):
+                # Get similarity measure per transform
+                for v, rep1, rep2 in transforms:
+                    # Calculate similarity for each direction
+                    simDirs = []
+                    for rep in rep2:
+                        rep = np.array(rep)
+                        simDirs += [
+                            analysis.multi_analysis(
+                                rep1,
+                                rep,
+                                preprocFuns,
+                                simFuns,
+                                analysisNames,
+                            )
+                        ]
+
+                    # Save the minimum similarity
+                    for fun in analysisNames:
+                        simDf.loc[len(simDf.index)] = [
+                            5,
+                            min([dic[fun] for dic in simDirs]),
+                        ]
+
+                # Save
+                simDf.to_csv(outPath, index=False)
+            else:
+                print(f"{outPath} already exists, skipping.", flush=True)
     elif args.analysis == "accuracy":
         augList = ["zoom", "reflect", "color", "noise", "translate"]
         dataLabels = np.load(args.labels_file)
