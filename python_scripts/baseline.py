@@ -290,6 +290,33 @@ def yield_transforms(
         else:
             yield v, rep1, rep2
 
+    elif transform == "random":
+        print(f" - Yielding {versions} repeats.")
+        for v in range(versions):
+            with tf.device("/cpu:0"):
+                # Flip half of the images
+                flipUniform = tf.random.uniform(
+                    shape=[dataset.shape[0], 1, 1, 1],
+                )
+                transImg = tf.where(
+                    tf.less(flipUniform, 0.5),
+                    tf.image.flip_left_right(dataset),
+                    dataset,
+                )
+
+                # Randomly translate images
+                transUniform = tf.random.uniform(
+                    shape=(dataset.shape[0], 2), minval=-5, maxval=5
+                )
+                transImg = tfa.image.translate(transImg, transUniform)
+
+                rep2 = batched_call(model, transImg, 512)
+
+                if return_aug:
+                    yield v, rep1, rep2, transImg
+                else:
+                    yield v, rep1, rep2
+
 
 def make_dropout_model(model, output_idx, droprate):
     """
@@ -395,6 +422,7 @@ if __name__ == "__main__":
             "noise",
             "accuracy",
             "maxAug",
+            "random",
         ],
     )
     parser.add_argument("--model_name", type=str, help="name of model to load")
@@ -592,11 +620,7 @@ if __name__ == "__main__":
                         rep = np.array(rep)
                         simDirs += [
                             analysis.multi_analysis(
-                                rep1,
-                                rep,
-                                preprocFuns,
-                                simFuns,
-                                analysisNames,
+                                rep1, rep, preprocFuns, simFuns, analysisNames
                             )
                         ]
 
@@ -606,6 +630,45 @@ if __name__ == "__main__":
                             5,
                             min([dic[fun] for dic in simDirs]),
                         ]
+
+                # Save
+                simDf.to_csv(outPath, index=False)
+            else:
+                print(f"{outPath} already exists, skipping.", flush=True)
+    elif args.analysis == "random":
+        for layer in args.layer_index:
+            print(f"Working on layer {layer}.", flush=True)
+            # Get transforms generators
+            transforms = yield_transforms(
+                args.analysis,
+                model,
+                int(layer),
+                dataset,
+                return_aug=False,
+                versions=args.versions,
+            )
+
+            # Create dataframe
+            simDf = pd.DataFrame(columns=["repeat"] + analysisNames)
+
+            outPath = os.path.join(
+                basePath,
+                f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-repeat'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+            )
+
+            if not os.path.exists(outPath):
+                # Get similarity measure per transform
+                for v, rep1, rep2 in transforms:
+                    # Calculate similarity for each direction
+                    sims = analysis.multi_analysis(
+                        rep1, rep2, preprocFuns, simFuns, analysisNames
+                    )
+
+                    # Save similarity into dataframe
+                    simDf = pd.concat([
+                        simDf,
+                        pd.DataFrame([[v] + [sims[fun] for fun in sims.keys()]], columns=["repeat"] + analysisNames)
+                    ])
 
                 # Save
                 simDf.to_csv(outPath, index=False)
