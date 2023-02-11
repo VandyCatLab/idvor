@@ -226,8 +226,8 @@ def bigSizeRatioTest():
 
 
 def parametricAblation(
-    minNeuron=3,
-    maxNeuron=10,
+    model,
+    imgset,
     nImgs=None,
     outputPath=None,
     preprocFuns=None,
@@ -236,12 +236,6 @@ def parametricAblation(
     outputIdx=-2,
     nPermutes=1000,
 ):
-    modelPath = "../outputs/masterOutput/models/w0s0.pb"
-    print("Loading model")
-    model = tf.keras.models.load_model(modelPath)
-
-    # load dataset
-    imgset = np.load("../outputs/masterOutput/dataset.npy")
 
     # Subset dataset
     if nImgs is not None:
@@ -458,7 +452,7 @@ if __name__ == "__main__":
         "-m",
         type=str,
         help="model to use for representations",
-        choices=["allcnnc", "mobilenet"],
+        choices=["allcnnc", "vgg", "resnet"],
         default="allcnnc",
     )
     parser.add_argument(
@@ -525,8 +519,13 @@ if __name__ == "__main__":
         if args.model == "allcnnc":
             modelPath = "../outputs/masterOutput/models/w0s0.pb"
             model = tf.keras.models.load_model(modelPath)
-        elif args.model == "mobilenet":
-            model = tf.keras.applications.MobileNetV3Small(
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(
+                input_shape=(224, 224, 3)
+            )
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(
                 input_shape=(224, 224, 3)
             )
             model.compile(metrics=["top_k_categorical_accuracy"])
@@ -551,8 +550,13 @@ if __name__ == "__main__":
         if args.model == "allcnnc":
             modelPath = "../outputs/masterOutput/models/w0s0.pb"
             model = tf.keras.models.load_model(modelPath)
-        elif args.model == "mobilenet":
-            model = tf.keras.applications.MobileNetV3Small(
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(
+                input_shape=(224, 224, 3)
+            )
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(
                 input_shape=(224, 224, 3)
             )
             model.compile(metrics=["top_k_categorical_accuracy"])
@@ -569,7 +573,30 @@ if __name__ == "__main__":
             nPermutes=args.permutes,
         )
     elif args.analysis == "ablate":
+        if args.dataset == "cifar10":
+            dataset = "../outputs/masterOutput/dataset.npy"
+        elif args.dataset == "imagenet":
+            dataset = "../outputs/masterOutput/bigDataset.npy"
+
+        if args.model == "allcnnc":
+            modelPath = "../outputs/masterOutput/models/w0s0.pb"
+            model = tf.keras.models.load_model(modelPath)
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(
+                input_shape=(224, 224, 3)
+            )
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(
+                input_shape=(224, 224, 3)
+            )
+            model.compile(metrics=["top_k_categorical_accuracy"])
+
+        dataset = np.load(dataset)
+
         parametricAblation(
+            model=model,
+            imgset=dataset,
             nImgs=args.nImgs,
             outputPath=args.outputPath,
             preprocFuns=preprocFuns,
@@ -584,7 +611,22 @@ if __name__ == "__main__":
         elif args.dataset == "imagenet":
             dataset = "../outputs/masterOutput/bigDataset.npy"
 
+        if args.model == "allcnnc":
+            modelPath = "../outputs/masterOutput/models/w0s0.pb"
+            model = tf.keras.models.load_model(modelPath)
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(
+                input_shape=(224, 224, 3)
+            )
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(
+                input_shape=(224, 224, 3)
+            )
+            model.compile(metrics=["top_k_categorical_accuracy"])
+
         sizeRatioTest(
+            model=model,
             nImgs=args.nImgs,
             outputPath=args.outputPath,
             imgset=dataset,
