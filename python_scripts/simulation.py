@@ -252,8 +252,9 @@ def parametricAblation(
     rep_orig = tmpModel.predict(imgset)
     repShape = rep_orig.shape
     rep_flat = rep_orig.flatten()
-    repMean = np.mean(rep_flat)
-    repSD = np.std(rep_flat)
+
+    # Calculate # of neurons to keep
+    neuronsKept = np.int32(np.arange(0.3, 1.1, 0.1) * repShape[1])
 
     colNames = analysisNames + ["Neurons"]
 
@@ -267,10 +268,8 @@ def parametricAblation(
         if permute % 100 == 0:
             print(f"-- Permutation at {permute}")
 
-        df = pd.DataFrame(
-            columns=colNames, index=range(minNeuron, maxNeuron + 1)
-        )
-        for nNeurons in range(minNeuron, maxNeuron + 1):
+        df = pd.DataFrame(columns=colNames, index=neuronsKept)
+        for nNeurons in neuronsKept:
             rep = np.random.choice(rep_flat, size=repShape, replace=False)
             repCut = np.copy(rep)
             repCut = repCut[
