@@ -455,14 +455,21 @@ def get_trajectories(directory, file_str="*", file_name=None):
 
 def get_model_from_args(args, return_model=True, modelType="seed"):
     # Get model
-    if hasattr(args, "model_name") and args.model_name == "mobilenet":
-        model = tf.keras.applications.MobileNetV3Small(
+    if hasattr(args, "model_name") and args.model_name == "vgg":
+        model = tf.keras.applications.vgg16.VGG16(
             input_shape=(224, 224, 3)
         )
         model.compile(metrics=["top_k_categorical_accuracy"])
-        print(f"Model loaded: MobileNetV3Small", flush=True)
+        print(f"Model loaded: vgg16", flush=True)
         model.summary()
-        return model, "mobilenet", "."
+        return model, "vgg16", "."
+    elif hasattr(args, "model_name") and args.model_name == "resnset":
+        model = tf.keras.applications.resnet50.ResNet50(
+            input_shape=(224, 224, 3)
+        )
+        model.compile(metrics=["top_k_categorical_accuracy"])
+        print(f"Model loaded: resnet50", flush=True)
+        return model, "resnet50", "."
     elif hasattr(args, "model_dir"):
         # List models in model_dir
         modelList = glob.glob(os.path.join(args.model_dir, "*.pb"))
