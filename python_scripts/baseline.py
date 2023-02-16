@@ -46,9 +46,7 @@ def yield_transforms(
         # Get counts
         nImages = input.shape[0]
         completeBatches = (
-            nImages // batch_size
-            if batch_size < input.shape[0]
-            else input.shape[0]
+            nImages // batch_size if batch_size < input.shape[0] else input.shape[0]
         )
         finalBatchSize = nImages % batch_size
 
@@ -57,9 +55,7 @@ def yield_transforms(
         for idx in range(completeBatches):
             # Create a batch
             with tf.device("/cpu:0"):
-                batch = input[
-                    (idx * batch_size) : ((idx + 1) * batch_size), :, :, :
-                ]
+                batch = input[(idx * batch_size) : ((idx + 1) * batch_size), :, :, :]
             outs += [model.call(batch, training=False)]
 
         # Final batch
@@ -209,9 +205,7 @@ def yield_transforms(
             # Generate transformed imageset
             with tf.device("/cpu:0"):
                 transformed_dataset = tf.zeros(1)
-                transformed_dataset = dataset[
-                    :, v : smallDim - v, v : smallDim - v, :
-                ]
+                transformed_dataset = dataset[:, v : smallDim - v, v : smallDim - v, :]
                 transformed_dataset = tf.image.resize(
                     transformed_dataset, (smallDim, smallDim)
                 )
@@ -318,6 +312,95 @@ def yield_transforms(
                     yield v, rep1, rep2
 
 
+def yield_big_transforms(
+    transform,
+    model,
+    preproc_fun,
+    layer_idx,
+    dataset,
+    versions=100,
+):
+    ds = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
+
+    def _load_images(path):
+        img = tf.io.read_file(path)
+        img = tf.image.decode_png(img, channels=3)
+
+        # Resize to target
+        if img.shape[0] > img.shape[1]:
+            # Resize based on height
+            img = tf.image.resize(img, (1000, 224), preserve_aspect_ratio=True)
+        else:
+            # Resize based on width
+            img = tf.image.resize(img, (224, 1000), preserve_aspect_ratio=True)
+        img = tf.image.resize_with_crop_or_pad(img, 224, 224)
+
+        # Preprocess
+        img = preproc_fun(img)
+
+        # Add batch dimension
+        img = tf.expand_dims(img, axis=0)
+
+        return img
+
+    ds = ds.map(_load_images)
+
+    # Set model to output reps at selected layer
+    inp = model.input
+    layer = model.layers[layer_idx]
+    out = layer.output
+    model = Model(inputs=inp, outputs=out)
+
+    # Get reps for originals
+    # rep1 = model.predict(ds, verbose=0, batch_size=32)
+
+    if transform == "maxAug":
+        raise NotImplementedError
+    elif transform == "random":
+        print(f" - Yielding {versions} repeats.")
+        transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
+
+        def _load_images_aug(path):
+            img = tf.io.read_file(path)
+            img = tf.image.decode_png(img, channels=3)
+
+            # Maybe flip image
+            img = tf.image.random_flip_left_right(img)
+
+            # Random resize and crop
+            randSize = tf.random.uniform(
+                shape=[], minval=256, maxval=512, dtype=tf.int32
+            )
+            img = tf.image.resize(img, (randSize, randSize), preserve_aspect_ratio=True)
+            img = tf.image.random_crop(img, (224, 224, 3))
+
+            # Preprocess
+            img = preproc_fun(img)
+
+            # Add batch dimension
+            img = tf.expand_dims(img, axis=0)
+
+            return img
+
+        transDs = transDs.map(_load_images_aug)
+        transDs.take(1)
+        for v in range(versions):
+            with tf.device("/cpu:0"):
+                # Generate random scales
+                scaleUniform = tf.random.uniform(
+                    shape=[dataset.shape[0]], minVal=256, maxVal=512, dtype=tf.int32
+                )
+                # Flip half of the images
+                flipUniform = tf.random.uniform(
+                    shape=[dataset.shape[0], 1, 1, 1],
+                )
+                transImg = tf.where(
+                    tf.less(flipUniform, 0.5),
+                    tf.image.flip_left_right(dataset),
+                    dataset,
+                )
+
+
 def make_dropout_model(model, output_idx, droprate):
     """
     Return a new model with the dropout layers activated during prediction with
@@ -382,9 +465,7 @@ def visualize_transform(transform, depth, img_arr):
         dim = img_arr.shape[0]
         v = depth
         empty = np.zeros((dim, dim, 3))
-        up_transformed = np.concatenate(
-            [img_arr[v:dim, :, :], empty[0:v, :, :]]
-        )
+        up_transformed = np.concatenate([img_arr[v:dim, :, :], empty[0:v, :, :]])
         down_transformed = np.concatenate(
             [empty[0:v, :, :], img_arr[0 : dim - v, :, :]]
         )
@@ -435,9 +516,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--shuffle_seed", type=int, help="shuffle seed of the main model"
     )
-    parser.add_argument(
-        "--weight_seed", type=int, help="weight seed of the main model"
-    )
+    parser.add_argument("--weight_seed", type=int, help="weight seed of the main model")
     parser.add_argument(
         "--model_seeds",
         type=str,
@@ -492,282 +571,309 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Load model
-    model, modelName, _ = analysis.get_model_from_args(args)
+    if args.analysis is not None:
+        # Load model
+        model, modelName, _ = analysis.get_model_from_args(args)
 
-    if not args.analysis == "accuracy":
-        model = analysis.make_allout_model(model)
+        if not args.analysis == "accuracy":
+            model = analysis.make_allout_model(model)
 
-    # Load dataset
-    print("Loading dataset", flush=True)
-    dataset = np.load(args.dataset_file)
-    print(f"dataset shape: {dataset.shape}", flush=True)
+        # Load dataset
+        print("Loading dataset", flush=True)
+        dataset = np.load(args.dataset_file)
+        print(f"dataset shape: {dataset.shape}", flush=True)
 
-    # Prep analysis functions
-    preprocFuns, simFuns, analysisNames = analysis.get_funcs(args.sim_funs)
+        # Prep analysis functions
+        preprocFuns, simFuns, analysisNames = analysis.get_funcs(args.sim_funs)
 
-    basePath = "../outputs/masterOutput/baseline/"
+        basePath = "../outputs/masterOutput/baseline/"
 
-    # Add analysis group
-    if args.group is not None:
-        basePath += args.group + "/"
-        if not os.path.exists(basePath):
-            os.mkdir(basePath)
+        # Add analysis group
+        if args.group is not None:
+            basePath += args.group + "/"
+            if not os.path.exists(basePath):
+                os.mkdir(basePath)
 
-    if args.analysis in ["translate", "zoom", "reflect", "color", "noise"]:
-        for layer in args.layer_index:
-            print(f"Working on layer {layer}.", flush=True)
-            # Get transforms generators
-            transforms = yield_transforms(
-                args.analysis,
-                model,
-                int(layer),
-                dataset,
-                return_aug=False,
-                versions=args.versions,
-                slice=args.version_slice,
-            )
-
-            # Create dataframe
-            if args.analysis == "translate":
-                directions = (
-                    ["right"] * len(simFuns)
-                    + ["left"] * len(simFuns)
-                    + ["down"] * len(simFuns)
-                    + ["up"] * len(simFuns)
+        if args.analysis in ["translate", "zoom", "reflect", "color", "noise"]:
+            for layer in args.layer_index:
+                print(f"Working on layer {layer}.", flush=True)
+                # Get transforms generators
+                transforms = yield_transforms(
+                    args.analysis,
+                    model,
+                    int(layer),
+                    dataset,
+                    return_aug=False,
+                    versions=args.versions,
+                    slice=args.version_slice,
                 )
-                colNames = [
-                    f"{fun}-{direct}"
-                    for direct, fun in zip(directions, analysisNames * 4)
-                ]
-                simDf = pd.DataFrame(columns=["version"] + colNames)
-            else:
+
+                # Create dataframe
+                if args.analysis == "translate":
+                    directions = (
+                        ["right"] * len(simFuns)
+                        + ["left"] * len(simFuns)
+                        + ["down"] * len(simFuns)
+                        + ["up"] * len(simFuns)
+                    )
+                    colNames = [
+                        f"{fun}-{direct}"
+                        for direct, fun in zip(directions, analysisNames * 4)
+                    ]
+                    simDf = pd.DataFrame(columns=["version"] + colNames)
+                else:
+                    simDf = pd.DataFrame(columns=["version"] + analysisNames)
+
+                outPath = os.path.join(
+                    basePath,
+                    f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+                )
+
+                if not os.path.exists(outPath):
+                    # Get similarity measure per transform
+                    for v, rep1, rep2 in transforms:
+                        if args.analysis == "translate":
+                            # Calculate similarity for each direction
+                            simDirs = []
+                            for rep in rep2:
+                                rep = np.array(rep)
+                                simDirs += [
+                                    analysis.multi_analysis(
+                                        rep1,
+                                        rep,
+                                        preprocFuns,
+                                        simFuns,
+                                        analysisNames,
+                                    )
+                                ]
+
+                            # Save all directions
+                            tmp = [v.numpy()]
+                            for dic in simDirs:
+                                tmp += [dic[key] for key in dic.keys()]
+
+                            simDf.loc[len(simDf.index)] = tmp
+                        else:
+                            sims = analysis.multi_analysis(
+                                rep1,
+                                rep2,
+                                preprocFuns,
+                                simFuns,
+                                names=analysisNames,
+                            )
+                            simDf.loc[len(simDf.index)] = [v] + [
+                                sims[fun] for fun in sims.keys()
+                            ]
+
+                    # Save
+                    simDf.to_csv(outPath, index=False)
+                else:
+                    print(f"{outPath} already exists, skipping.", flush=True)
+        elif args.analysis == "maxAug":
+            for layer in args.layer_index:
+                print(f"Working on layer {layer}.", flush=True)
+                # Get transforms generators
+                transforms = yield_transforms(
+                    args.analysis,
+                    model,
+                    int(layer),
+                    dataset,
+                    return_aug=False,
+                    versions=args.versions,
+                    slice=args.version_slice,
+                )
+
+                # Create dataframe
                 simDf = pd.DataFrame(columns=["version"] + analysisNames)
 
-            outPath = os.path.join(
-                basePath,
-                f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
-            )
+                outPath = os.path.join(
+                    basePath,
+                    f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+                )
 
-            if not os.path.exists(outPath):
-                # Get similarity measure per transform
-                for v, rep1, rep2 in transforms:
-                    if args.analysis == "translate":
+                if not os.path.exists(outPath):
+                    # Get similarity measure per transform
+                    for v, rep1, rep2 in transforms:
                         # Calculate similarity for each direction
                         simDirs = []
                         for rep in rep2:
                             rep = np.array(rep)
                             simDirs += [
                                 analysis.multi_analysis(
-                                    rep1,
-                                    rep,
-                                    preprocFuns,
-                                    simFuns,
-                                    analysisNames,
+                                    rep1, rep, preprocFuns, simFuns, analysisNames
                                 )
                             ]
 
-                        # Save all directions
-                        tmp = [v.numpy()]
-                        for dic in simDirs:
-                            tmp += [dic[key] for key in dic.keys()]
+                        # Save the minimum similarity
+                        for fun in analysisNames:
+                            simDf.loc[len(simDf.index)] = [
+                                5,
+                                min([dic[fun] for dic in simDirs]),
+                            ]
 
-                        simDf.loc[len(simDf.index)] = tmp
-                    else:
-                        sims = analysis.multi_analysis(
-                            rep1,
-                            rep2,
-                            preprocFuns,
-                            simFuns,
-                            names=analysisNames,
-                        )
-                        simDf.loc[len(simDf.index)] = [v] + [
-                            sims[fun] for fun in sims.keys()
-                        ]
-
-                # Save
-                simDf.to_csv(outPath, index=False)
-            else:
-                print(f"{outPath} already exists, skipping.", flush=True)
-    elif args.analysis == "maxAug":
-        for layer in args.layer_index:
-            print(f"Working on layer {layer}.", flush=True)
-            # Get transforms generators
-            transforms = yield_transforms(
-                args.analysis,
-                model,
-                int(layer),
-                dataset,
-                return_aug=False,
-                versions=args.versions,
-                slice=args.version_slice,
-            )
-
-            # Create dataframe
-            simDf = pd.DataFrame(columns=["version"] + analysisNames)
-
-            outPath = os.path.join(
-                basePath,
-                f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
-            )
-
-            if not os.path.exists(outPath):
-                # Get similarity measure per transform
-                for v, rep1, rep2 in transforms:
-                    # Calculate similarity for each direction
-                    simDirs = []
-                    for rep in rep2:
-                        rep = np.array(rep)
-                        simDirs += [
-                            analysis.multi_analysis(
-                                rep1, rep, preprocFuns, simFuns, analysisNames
-                            )
-                        ]
-
-                    # Save the minimum similarity
-                    for fun in analysisNames:
-                        simDf.loc[len(simDf.index)] = [
-                            5,
-                            min([dic[fun] for dic in simDirs]),
-                        ]
-
-                # Save
-                simDf.to_csv(outPath, index=False)
-            else:
-                print(f"{outPath} already exists, skipping.", flush=True)
-    elif args.analysis == "random":
-        for layer in args.layer_index:
-            print(f"Working on layer {layer}.", flush=True)
-            # Get transforms generators
-            transforms = yield_transforms(
-                args.analysis,
-                model,
-                int(layer),
-                dataset,
-                return_aug=False,
-                versions=args.versions,
-            )
-
-            # Create dataframe
-            simDf = pd.DataFrame(columns=["repeat"] + analysisNames)
-
-            outPath = os.path.join(
-                basePath,
-                f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-repeat'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
-            )
-
-            if not os.path.exists(outPath):
-                # Get similarity measure per transform
-                for v, rep1, rep2 in transforms:
-                    # Calculate similarity for each direction
-                    sims = analysis.multi_analysis(
-                        rep1, rep2, preprocFuns, simFuns, analysisNames
-                    )
-
-                    # Save similarity into dataframe
-                    simDf = pd.concat([
-                        simDf,
-                        pd.DataFrame([[v] + [sims[fun] for fun in sims.keys()]], columns=["repeat"] + analysisNames)
-                    ])
-
-                # Save
-                simDf.to_csv(outPath, index=False)
-            else:
-                print(f"{outPath} already exists, skipping.", flush=True)
-    elif args.analysis == "accuracy":
-        augList = ["zoom", "reflect", "color", "noise", "translate"]
-        dataLabels = np.load(args.labels_file)
-
-        # First handle augment tests first
-        for aug in augList:
-            # Make transforms, note selecting first layer for efficiency sake
-            transforms = yield_transforms(
-                aug,
-                model,
-                1,
-                dataset,
-                return_aug=True,
-                slice=args.version_slice,
-            )
-
-            # Create dataframe
-            colNames = (
-                ["version", "rightAcc", "leftAcc", "downAcc", "upAcc"]
-                if aug == "translate"
-                else ["version", "acc"]
-            )
-            accDF = pd.DataFrame(columns=colNames)
-
-            # Get similarity measure per transform
-            for v, _, _, transImg in transforms:
-                if aug == "translate":
-                    # Split image to the directions
-                    transDir = tf.split(transImg, 4)
-                    accs = [0.0] * 4
-                    for i, direct in enumerate(transDir):
-                        _, accs[i] = model.evaluate(
-                            direct, dataLabels, batch_size=128
-                        )
-
-                    accDF.loc[len(accDF.index)] = [float(v.numpy())] + accs
+                    # Save
+                    simDf.to_csv(outPath, index=False)
                 else:
-                    _, acc = model.evaluate(
-                        transImg, dataLabels, batch_size=128
-                    )
-                    accDF.loc[len(accDF.index)] = [v, acc]
+                    print(f"{outPath} already exists, skipping.", flush=True)
+        elif args.analysis == "random":
+            for layer in args.layer_index:
+                print(f"Working on layer {layer}.", flush=True)
+                # Get transforms generators
+                transforms = yield_transforms(
+                    args.analysis,
+                    model,
+                    int(layer),
+                    dataset,
+                    return_aug=False,
+                    versions=args.versions,
+                )
 
-            # Save
+                # Create dataframe
+                simDf = pd.DataFrame(columns=["repeat"] + analysisNames)
+
+                outPath = os.path.join(
+                    basePath,
+                    f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-repeat'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+                )
+
+                if not os.path.exists(outPath):
+                    # Get similarity measure per transform
+                    for v, rep1, rep2 in transforms:
+                        # Calculate similarity for each direction
+                        sims = analysis.multi_analysis(
+                            rep1, rep2, preprocFuns, simFuns, analysisNames
+                        )
+
+                        # Save similarity into dataframe
+                        simDf = pd.concat(
+                            [
+                                simDf,
+                                pd.DataFrame(
+                                    [[v] + [sims[fun] for fun in sims.keys()]],
+                                    columns=["repeat"] + analysisNames,
+                                ),
+                            ]
+                        )
+
+                    # Save
+                    simDf.to_csv(outPath, index=False)
+                else:
+                    print(f"{outPath} already exists, skipping.", flush=True)
+        elif args.analysis == "accuracy":
+            augList = ["zoom", "reflect", "color", "noise", "translate"]
+            dataLabels = np.load(args.labels_file)
+
+            # First handle augment tests first
+            for aug in augList:
+                # Make transforms, note selecting first layer for efficiency sake
+                transforms = yield_transforms(
+                    aug,
+                    model,
+                    1,
+                    dataset,
+                    return_aug=True,
+                    slice=args.version_slice,
+                )
+
+                # Create dataframe
+                colNames = (
+                    ["version", "rightAcc", "leftAcc", "downAcc", "upAcc"]
+                    if aug == "translate"
+                    else ["version", "acc"]
+                )
+                accDF = pd.DataFrame(columns=colNames)
+
+                # Get similarity measure per transform
+                for v, _, _, transImg in transforms:
+                    if aug == "translate":
+                        # Split image to the directions
+                        transDir = tf.split(transImg, 4)
+                        accs = [0.0] * 4
+                        for i, direct in enumerate(transDir):
+                            _, accs[i] = model.evaluate(
+                                direct, dataLabels, batch_size=128
+                            )
+
+                        accDF.loc[len(accDF.index)] = [float(v.numpy())] + accs
+                    else:
+                        _, acc = model.evaluate(transImg, dataLabels, batch_size=128)
+                        accDF.loc[len(accDF.index)] = [v, acc]
+
+                # Save
+                outPath = os.path.join(
+                    basePath,
+                    f"{modelName[0:-3]}-acc-{aug}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+                )
+                accDF.to_csv(outPath, index=False)
+
+            # Now do dropout
+            dropRates = np.arange(0, 1, 0.05)
+            accDF = pd.DataFrame(columns=["version", "acc"])
+            for drop in dropRates:
+                dropModel = make_dropout_model(model, [-1], drop)
+                dropModel.compile(
+                    optimizer="SGD",
+                    loss="categorical_crossentropy",
+                    metrics=["accuracy"],
+                )
+                _, acc = dropModel.evaluate(dataset, dataLabels, batch_size=128)
+                accDF.loc[len(accDF.index)] = [drop, acc]
+
+            outPath = os.path.join(basePath, f"{modelName[0:-3]}-acc-drop.csv")
+            accDF.to_csv(outPath, index=False)
+        elif args.analysis == "dropout":
+            layerIdx = [int(idx) for idx in args.layer_index]
+            layerIdx.sort()
+            dropRates = np.arange(0, 1, 0.05)
+
+            data = pd.DataFrame(columns=analysisNames + ["layer", "dropRate"])
+            for drop in dropRates:
+                if args.version_slice is not None and not args.version_slice == drop:
+                    continue
+                dropModel = make_dropout_model(model, layerIdx, drop)
+                rep1 = dropModel.predict(dataset)
+                rep2 = dropModel.predict(dataset)
+
+                # Make sure it's a list
+                rep1 = rep1 if isinstance(rep1, list) else [rep1]
+                rep2 = rep2 if isinstance(rep1, list) else [rep2]
+
+                for i in range(len(rep1)):
+                    sims = analysis.multi_analysis(
+                        rep1[i], rep2[i], preprocFuns, simFuns, names=analysisNames
+                    )
+                    sims["layer"] = layerIdx[i]
+                    sims["dropRate"] = drop
+                    data.loc[len(data.index)] = [sims[fun] for fun in sims.keys()]
+
             outPath = os.path.join(
                 basePath,
-                f"{modelName[0:-3]}-acc-{aug}{'-v'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+                f"{modelName.split('.')[0]}-dropout-{','.join([str(idx) for idx in layerIdx])}.csv",
             )
-            accDF.to_csv(outPath, index=False)
+            data.to_csv(outPath, index=False)
+    else:  # Main
+        model = tf.keras.applications.vgg16.VGG16()
+        preproc_fun = tf.keras.applications.vgg16.preprocess_input
+        layer_idx = -2
+        dataset = "../outputs/masterOutput/dataset"
 
-        # Now do dropout
-        dropRates = np.arange(0, 1, 0.05)
-        accDF = pd.DataFrame(columns=["version", "acc"])
-        for drop in dropRates:
-            dropModel = make_dropout_model(model, [-1], drop)
-            dropModel.compile(
-                optimizer="SGD",
-                loss="categorical_crossentropy",
-                metrics=["accuracy"],
-            )
-            _, acc = dropModel.evaluate(dataset, dataLabels, batch_size=128)
-            accDF.loc[len(accDF.index)] = [drop, acc]
+        # List files
+        files = os.listdir(dataset)
+        imgs = np.empty((len(files), 224, 224, 3))
+        for i, file in enumerate(files):
+            img = tf.io.read_file(dataset + "/" + file)
+            img = tf.image.decode_png(img, channels=3)
+            # Check which dimension is larger
+            if img.shape[0] > img.shape[1]:
+                # Resize based on height
+                img = tf.image.resize(img, (1000, 224), preserve_aspect_ratio=True)
+            else:
+                # Resize based on width
+                img = tf.image.resize(img, (224, 1000), preserve_aspect_ratio=True)
+            img = tf.image.resize_with_crop_or_pad(img, 224, 224)
 
-        outPath = os.path.join(basePath, f"{modelName[0:-3]}-acc-drop.csv")
-        accDF.to_csv(outPath, index=False)
-    elif args.analysis == "dropout":
-        layerIdx = [int(idx) for idx in args.layer_index]
-        layerIdx.sort()
-        dropRates = np.arange(0, 1, 0.05)
+            imgs[i] = img
 
-        data = pd.DataFrame(columns=analysisNames + ["layer", "dropRate"])
-        for drop in dropRates:
-            if (
-                args.version_slice is not None
-                and not args.version_slice == drop
-            ):
-                continue
-            dropModel = make_dropout_model(model, layerIdx, drop)
-            rep1 = dropModel.predict(dataset)
-            rep2 = dropModel.predict(dataset)
-
-            # Make sure it's a list
-            rep1 = rep1 if isinstance(rep1, list) else [rep1]
-            rep2 = rep2 if isinstance(rep1, list) else [rep2]
-
-            for i in range(len(rep1)):
-                sims = analysis.multi_analysis(
-                    rep1[i], rep2[i], preprocFuns, simFuns, names=analysisNames
-                )
-                sims["layer"] = layerIdx[i]
-                sims["dropRate"] = drop
-                data.loc[len(data.index)] = [sims[fun] for fun in sims.keys()]
-
-        outPath = os.path.join(
-            basePath,
-            f"{modelName.split('.')[0]}-dropout-{','.join([str(idx) for idx in layerIdx])}.csv",
+        yield_big_transforms(
+            "random", model, preproc_fun, layer_idx, dataset, versions=100
         )
-        data.to_csv(outPath, index=False)
