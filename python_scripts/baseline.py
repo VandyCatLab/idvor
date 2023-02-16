@@ -361,6 +361,11 @@ def yield_big_transforms(
         transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
 
         def _load_images_aug(path):
+            eigVals = [115.25870013, 35.37227674, 17.20782363]
+            eigVecs = [[-0.58215351, 0.69303716, -0.42520205],
+                       [-0.58321022, 0.00846138, 0.81227719],
+                       [-0.56653607, -0.72085221, -0.39926053]]
+
             img = tf.io.read_file(path)
             img = tf.image.decode_png(img, channels=3)
 
@@ -377,13 +382,21 @@ def yield_big_transforms(
             # Preprocess
             img = preproc_fun(img)
 
+            # Select random alpha for pca color augmentation
+            alpha = tf.random.gaussian(shape=[3], mean=0.0, stddev=0.1)
+            eigVals = eigVals * alpha
+            eigVecs = tf.cast(eigVecs, tf.float32)
+            eigVals = tf.cast(eigVals, tf.float32)
+            colorAug = tf.linalg.matmul(eigVecs, eigVals)
+            colorAug = tf.reshape(colorAug, [1, 1, 3])
+            img = img + colorAug
+
             # Add batch dimension
             img = tf.expand_dims(img, axis=0)
 
             return img
 
         transDs = transDs.map(_load_images_aug)
-        transDs.take(1)
         for v in range(versions):
             with tf.device("/cpu:0"):
                 # Generate random scales
@@ -874,6 +887,18 @@ if __name__ == "__main__":
 
             imgs[i] = img
 
+        imgs = tf.keras.applications.vgg16.preprocess_input(imgs)
+        
+        with tf.device('/cpu:0'):
+            imgsFlat = tf.reshape(imgs, (-1, 3))
+            imgCov = np.cov(imgsFlat, rowvar=False)
+            eigVals, eigVecs = np.linalg.eig(imgCov)
+
+        sortIdx = eigVals.argsort()[::-1]
+        eigVals = eigVals[sortIdx]
+        eigVecs = eigVecs[:, sortIdx]
+        print(eigVal)
+        print(eigVecs)
         yield_big_transforms(
             "random", model, preproc_fun, layer_idx, dataset, versions=100
         )
