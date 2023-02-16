@@ -344,6 +344,7 @@ def yield_big_transforms(
         return img
 
     ds = ds.map(_load_images)
+    ds = ds.batch(136)
 
     # Set model to output reps at selected layer
     inp = model.input
@@ -352,7 +353,7 @@ def yield_big_transforms(
     model = Model(inputs=inp, outputs=out)
 
     # Get reps for originals
-    # rep1 = model.predict(ds, verbose=0, batch_size=32)
+    rep1 = model.predict(ds, verbose=0)
 
     if transform == "maxAug":
         raise NotImplementedError
@@ -397,21 +398,11 @@ def yield_big_transforms(
             return img
 
         transDs = transDs.map(_load_images_aug)
+        transDs = transDs.batch(128)
         for v in range(versions):
-            with tf.device("/cpu:0"):
-                # Generate random scales
-                scaleUniform = tf.random.uniform(
-                    shape=[dataset.shape[0]], minVal=256, maxVal=512, dtype=tf.int32
-                )
-                # Flip half of the images
-                flipUniform = tf.random.uniform(
-                    shape=[dataset.shape[0], 1, 1, 1],
-                )
-                transImg = tf.where(
-                    tf.less(flipUniform, 0.5),
-                    tf.image.flip_left_right(dataset),
-                    dataset,
-                )
+            rep2 = model.predict(model, transDs)
+
+            yield v, rep1, rep2
 
 
 def make_dropout_model(model, output_idx, droprate):
@@ -897,7 +888,7 @@ if __name__ == "__main__":
         sortIdx = eigVals.argsort()[::-1]
         eigVals = eigVals[sortIdx]
         eigVecs = eigVecs[:, sortIdx]
-        print(eigVal)
+        print(eigVals)
         print(eigVecs)
         yield_big_transforms(
             "random", model, preproc_fun, layer_idx, dataset, versions=100
