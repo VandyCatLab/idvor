@@ -49,9 +49,7 @@ def make_train_data(
     x_flat = x_train.reshape(x_train.shape[0], -1)
 
     vec, val, _ = np.linalg.svd(np.cov(x_flat, rowvar=False))
-    prinComps = np.dot(
-        vec, np.dot(np.diag(1.0 / np.sqrt(val + 0.00001)), vec.T)
-    )
+    prinComps = np.dot(vec, np.dot(np.diag(1.0 / np.sqrt(val + 0.00001)), vec.T))
 
     x_train = np.dot(x_flat, prinComps).reshape(x_train.shape)
     testFlat = x_test.reshape(x_test.shape[0], -1)
@@ -60,17 +58,13 @@ def make_train_data(
     if item_max is not None or cat_max is not None:
         item_max = item_max if item_max is not None else 1
 
-        print(
-            f"Generating dataset for item-level differences, max items {item_max}"
-        )
+        print(f"Generating dataset for item-level differences, max items {item_max}")
         np.random.seed(data_seed)
         weights = np.random.randint(1, item_max + 1, x_train.shape[0])
 
         if cat_max is not None:
             print(f"Adding category level weighting, max weight {cat_max}")
-            catWeight = np.random.randint(
-                1, cat_max + 1, len(np.unique(y_train))
-            )
+            catWeight = np.random.randint(1, cat_max + 1, len(np.unique(y_train)))
             catWeight = catWeight / np.sum(catWeight)
 
             # Generate category counts with category weight
@@ -85,16 +79,12 @@ def make_train_data(
             )
 
         # Loop through each category and sample images
-        newTrain = np.zeros(
-            (0, x_train.shape[1], x_train.shape[2], x_train.shape[3])
-        )
+        newTrain = np.zeros((0, x_train.shape[1], x_train.shape[2], x_train.shape[3]))
         newLabels = np.zeros((0, 1))
         for i in range(np.max(y_trainRaw) + 1):
             indices = np.where(y_trainRaw == i)[0]
             indWeight = weights[indices] / np.sum(weights[indices])
-            newIndices = np.random.choice(
-                indices, size=int(catCounts[i]), p=indWeight
-            )
+            newIndices = np.random.choice(indices, size=int(catCounts[i]), p=indWeight)
             newTrain = np.concatenate((newTrain, x_train[newIndices]))
             newLabels = np.concatenate((newLabels, y_train[newIndices]))
 
@@ -154,9 +144,7 @@ def preprocess(imgset):
     x_flat = x_train.reshape(x_train.shape[0], -1)
 
     vec, val, _ = np.linalg.svd(np.cov(x_flat, rowvar=False))
-    prinComps = np.dot(
-        vec, np.dot(np.diag(1.0 / np.sqrt(val + 0.00001)), vec.T)
-    )
+    prinComps = np.dot(vec, np.dot(np.diag(1.0 / np.sqrt(val + 0.00001)), vec.T))
 
     testFlat = imgset.reshape(imgset.shape[0], -1)
     imgset = np.dot(testFlat, prinComps).reshape(imgset.shape)
@@ -306,9 +294,7 @@ class preproc:
             return img
 
 
-def create_cinic10_set(
-    dataPath="/data/CINIC10/test", examples=10, dtype="float64"
-):
+def create_cinic10_set(dataPath="/data/CINIC10/test", examples=10, dtype="float64"):
     """
     Return a part of CINIC10 dataset for testing. Each class will have the
     number of examples, global contrast normalized,
@@ -389,9 +375,7 @@ def create_imagenet_subset(
     if save_dir is not None:
         for i in range(1000):
             for j, img in enumerate(outImgs[i]):
-                PIL.Image.fromarray(img.numpy()).save(
-                    save_dir + f"/{i}_{j}.png"
-                )
+                PIL.Image.fromarray(img.numpy()).save(save_dir + f"/{i}_{j}.png")
     return outImgs
 
 
@@ -426,7 +410,9 @@ def collect_big_cifar10(output_dir):
             print(f'Missing synset "{row["synset"]}"')
 
         # Check if the image exists
-        imagePath = f"/data/imagenet21k/{row['synset']}/{row['synset']}_{row['image_num']}.JPEG"
+        imagePath = (
+            f"/data/imagenet21k/{row['synset']}/{row['synset']}_{row['image_num']}.JPEG"
+        )
         if not os.path.exists(imagePath):
             print(f'Missing image "{row["synset"]}_{row["image_num"]}.JPEG"')
 
