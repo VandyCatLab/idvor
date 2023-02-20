@@ -327,23 +327,21 @@ def yield_big_transforms(
         img = tf.image.decode_png(img, channels=3)
 
         # Resize to target
-        if img.shape[0] > img.shape[1]:
+        if tf.greater(tf.shape(img)[0], tf.shape(img)[1]):
             # Resize based on height
-            img = tf.image.resize(img, (1000, 224), preserve_aspect_ratio=True)
+            img = tf.image.resize(img, (10000, 224), preserve_aspect_ratio=True)
         else:
             # Resize based on width
-            img = tf.image.resize(img, (224, 1000), preserve_aspect_ratio=True)
+            img = tf.image.resize(img, (224, 10000), preserve_aspect_ratio=True)
         img = tf.image.resize_with_crop_or_pad(img, 224, 224)
 
         # Preprocess
         img = preproc_fun(img)
 
-        # Add batch dimension
-        img = tf.expand_dims(img, axis=0)
-
         return img
 
     ds = ds.map(_load_images)
+    ds = ds.batch(32)
 
     # Set model to output reps at selected layer
     inp = model.input
@@ -352,10 +350,17 @@ def yield_big_transforms(
     model = Model(inputs=inp, outputs=out)
 
     # Get reps for originals
-    # rep1 = model.predict(ds, verbose=0, batch_size=32)
+    rep1 = model.predict(ds, verbose=0)
 
     if transform == "maxAug":
+        transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
+
+        def _load_images_maxAug(path):
+            img = tf.io.read_file(path)
+            img = tf.image.decode_png(img, channels=3)
+
         raise NotImplementedError
+
     elif transform == "random":
         print(f" - Yielding {versions} repeats.")
         transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
@@ -371,34 +376,47 @@ def yield_big_transforms(
             randSize = tf.random.uniform(
                 shape=[], minval=256, maxval=512, dtype=tf.int32
             )
-            img = tf.image.resize(img, (randSize, randSize), preserve_aspect_ratio=True)
+
+            img = tf.cond(
+                tf.greater(tf.shape(img)[0], tf.shape(img)[1]),
+                lambda: tf.image.resize(
+                    img, (10000, randSize), preserve_aspect_ratio=True
+                ),
+                lambda: tf.image.resize(
+                    img, (randSize, 10000), preserve_aspect_ratio=True
+                ),
+            )
+
             img = tf.image.random_crop(img, (224, 224, 3))
 
             # Preprocess
             img = preproc_fun(img)
 
-            # Add batch dimension
-            img = tf.expand_dims(img, axis=0)
+            eigVals = [[115.25870013, 35.37227674, 17.20782363]]
+            eigVecs = [
+                [-0.58215351, 0.69303716, -0.42520205],
+                [-0.58321022, 0.00846138, 0.81227719],
+                [-0.56653607, -0.72085221, -0.39926053],
+            ]
+            # Select random alpha for pca color augmentation
+            alpha = tf.random.normal(shape=[3], mean=0.0, stddev=0.1)
+            eigVals = eigVals * alpha
+            eigVecs = tf.cast(eigVecs, tf.float32)
+            eigVals = tf.transpose(tf.cast(eigVals, tf.float32))
+            colorAug = tf.linalg.matmul(eigVecs, eigVals)
+            colorAug = tf.reshape(colorAug, [1, 1, 3])
+            img = img + colorAug
 
             return img
 
         transDs = transDs.map(_load_images_aug)
-        transDs.take(1)
+        transDs = transDs.batch(32)
+
         for v in range(versions):
-            with tf.device("/cpu:0"):
-                # Generate random scales
-                scaleUniform = tf.random.uniform(
-                    shape=[dataset.shape[0]], minVal=256, maxVal=512, dtype=tf.int32
-                )
-                # Flip half of the images
-                flipUniform = tf.random.uniform(
-                    shape=[dataset.shape[0], 1, 1, 1],
-                )
-                transImg = tf.where(
-                    tf.less(flipUniform, 0.5),
-                    tf.image.flip_left_right(dataset),
-                    dataset,
-                )
+            # Get reps for transformed images
+            rep2 = model.predict(transDs, verbose=0)
+
+            yield v, rep1, rep2
 
 
 def make_dropout_model(model, output_idx, droprate):
@@ -858,22 +876,12 @@ if __name__ == "__main__":
         dataset = "../outputs/masterOutput/dataset"
 
         # List files
-        files = os.listdir(dataset)
-        imgs = np.empty((len(files), 224, 224, 3))
-        for i, file in enumerate(files):
-            img = tf.io.read_file(dataset + "/" + file)
-            img = tf.image.decode_png(img, channels=3)
-            # Check which dimension is larger
-            if img.shape[0] > img.shape[1]:
-                # Resize based on height
-                img = tf.image.resize(img, (1000, 224), preserve_aspect_ratio=True)
-            else:
-                # Resize based on width
-                img = tf.image.resize(img, (224, 1000), preserve_aspect_ratio=True)
-            img = tf.image.resize_with_crop_or_pad(img, 224, 224)
-
-            imgs[i] = img
-
-        yield_big_transforms(
+        repMaker = yield_big_transforms(
             "random", model, preproc_fun, layer_idx, dataset, versions=100
         )
+
+        for v, rep1, rep2 in repMaker:
+            print(v)
+            print(rep1.shape)
+            print(rep2.shape)
+            rep1
