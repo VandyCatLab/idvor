@@ -323,7 +323,7 @@ def parametricNoise(
     colNames = analysisNames + ["Noise"]
 
     permuteData = pd.DataFrame(columns=colNames)
-    noiseRange = np.arange(minNoise, maxNoise + 0.1, step)
+    noiseRange = np.arange(minNoise, maxNoise + step, step)
 
     # Set seed if available
     if seed is not None:
@@ -490,8 +490,10 @@ if __name__ == "__main__":
     if args.analysis == "noise":
         if args.dataset == "cifar10":
             dataset = np.load("../outputs/masterOutput/dataset.npy")
+            step = 0.01
         elif args.dataset == "imagenet":
             dataset = np.load("../outputs/masterOutput/bigDataset.npy")
+            step = 0.1
 
         if args.model == "allcnnc":
             modelPath = "../outputs/masterOutput/models/w0s0.pb"
@@ -507,7 +509,7 @@ if __name__ == "__main__":
             model,
             dataset,
             maxNoise=4.0,
-            step=0.01,
+            step=step,
             permutations=args.permutes,
             seed=args.seed,
             nImgs=args.nImgs,
