@@ -41,7 +41,7 @@ def preprocess_peaRsaNumba(acts):
     return preprocess_rsaNumba(acts)
 
 
-@nb.jit(nopython=True, parallel=True)
+@nb.jit(nopython=True)
 def preprocess_speRsaNumba(acts):
     assert acts.ndim in (2, 4)
 
@@ -202,7 +202,7 @@ def get_threshold(acts):
     return ans
 
 
-@nb.jit(nopython=True, parallel=True)
+@nb.jit(nopython=True)
 def preprocess_ckaNumba(acts):
     if acts.ndim == 4:
         nImg = acts.shape[0]

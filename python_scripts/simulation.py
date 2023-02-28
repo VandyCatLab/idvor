@@ -16,7 +16,6 @@ def permuteTest(
     outputIdx=-2,
     nPermutes=1000,
 ):
-
     # Subset dataset
     if nImgs is not None:
         dataset = dataset[:nImgs]
@@ -234,7 +233,6 @@ def parametricAblation(
     outputIdx=-2,
     nPermutes=1000,
 ):
-
     # Subset dataset
     if nImgs is not None:
         imgset = imgset[:nImgs]
@@ -352,7 +350,7 @@ def parametricNoise(
                 repNoise,
                 preprocFuns,
                 simFuns,
-                verbose=False,
+                verbose=True,
                 names=analysisNames,
             )
             df.loc[noise] = list(sims.values()) + [noise]
@@ -493,7 +491,7 @@ if __name__ == "__main__":
             step = 0.01
         elif args.dataset == "imagenet":
             dataset = np.load("../outputs/masterOutput/bigDataset.npy")
-            step = 0.1
+            step = 0.5
 
         if args.model == "allcnnc":
             modelPath = "../outputs/masterOutput/models/w0s0.pb"
