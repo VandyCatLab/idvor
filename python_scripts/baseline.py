@@ -288,20 +288,29 @@ def yield_transforms(
         print(f" - Yielding {versions} repeats.")
         for v in range(versions):
             with tf.device("/cpu:0"):
+                transImg = tf.identity(dataset)
+
                 # Flip half of the images
-                flipUniform = tf.random.uniform(
-                    shape=[dataset.shape[0], 1, 1, 1],
-                )
-                transImg = tf.where(
-                    tf.less(flipUniform, 0.5),
-                    tf.image.flip_left_right(dataset),
-                    dataset,
+                # flipUniform = tf.random.uniform(
+                #     shape=[dataset.shape[0], 1, 1, 1],
+                # )
+                # transImg = tf.where(
+                #     tf.less(flipUniform, 0.5),
+                #     tf.image.flip_left_right(transImg),
+                #     transImg,
+                # )
+
+                transImg = tf.cond(
+                    tf.less(tf.random.uniform(shape=(), minval=0, maxval=1), 0.5),
+                    lambda: tf.image.flip_left_right(transImg),
+                    lambda: transImg,
                 )
 
                 # Randomly translate images
-                transUniform = tf.random.uniform(
-                    shape=(dataset.shape[0], 2), minval=-5, maxval=5
-                )
+                # transUniform = tf.random.uniform(
+                #     shape=(dataset.shape[0], 2), minval=-0, maxval=0
+                # )
+                transUniform = tf.random.uniform(shape=(1, 2), minval=-5, maxval=5)
                 transImg = tfa.image.translate(transImg, transUniform)
 
                 rep2 = batched_call(model, transImg, 512)
@@ -367,9 +376,11 @@ def yield_big_transforms(
 
         def _load_images_aug(path):
             eigVals = [115.25870013, 35.37227674, 17.20782363]
-            eigVecs = [[-0.58215351, 0.69303716, -0.42520205],
-                       [-0.58321022, 0.00846138, 0.81227719],
-                       [-0.56653607, -0.72085221, -0.39926053]]
+            eigVecs = [
+                [-0.58215351, 0.69303716, -0.42520205],
+                [-0.58321022, 0.00846138, 0.81227719],
+                [-0.56653607, -0.72085221, -0.39926053],
+            ]
 
             img = tf.io.read_file(path)
             img = tf.image.decode_png(img, channels=3)
