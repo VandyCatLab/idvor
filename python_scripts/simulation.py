@@ -251,6 +251,8 @@ def parametricAblation(
 
     # Calculate # of neurons to keep
     neuronsKept = np.int32(np.arange(0.3, 1.1, 0.1) * repShape[1])
+    # Reverse order
+    neuronsKept = neuronsKept[::-1]
 
     colNames = analysisNames + ["Neurons"]
 
