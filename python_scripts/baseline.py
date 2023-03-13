@@ -243,7 +243,7 @@ def yield_transforms(
 
     elif transform == "maxAug":
         print(f" - Yielding 1 version.")
-        v = 5
+        v = 5 if versions is None else versions
         print(
             f"Translating {v} pixels in both directions after horizontal flip.",
             flush=True,
@@ -874,18 +874,25 @@ if __name__ == "__main__":
             )
             data.to_csv(outPath, index=False)
     else:  # Main
-        model = tf.keras.applications.vgg16.VGG16()
-        preproc_fun = tf.keras.applications.vgg16.preprocess_input
-        layer_idx = -2
-        dataset = "../outputs/masterOutput/dataset"
+        model = f"../outputs/masterOutput/models/w0s0.pb"
+        model = tf.keras.models.load_model(model)
+        dataset = np.load("../outputs/masterOutput/dataset.npy")
+        preprocFuns, simFuns, analysisNames = analysis.get_funcs("eucRsa")
+        simList = []
+        for v in range(6):
+            transforms = yield_transforms("maxAug", model, 9, dataset, False, v)
 
-        # List files
-        repMaker = yield_big_transforms(
-            "random", model, preproc_fun, layer_idx, dataset, versions=100
-        )
+            for _, rep1, rep2 in transforms:
+                simDirs = []
+                for rep in rep2:
+                    rep = np.array(rep)
+                    simDirs += [
+                        analysis.multi_analysis(
+                            rep1, rep, preprocFuns, simFuns, analysisNames
+                        )
+                    ]
+                sims = [list(sim.values())[0] for sim in simDirs]
 
-        for v, rep1, rep2 in repMaker:
-            print(v)
-            print(rep1.shape)
-            print(rep2.shape)
-            rep1
+                simList.append(max(sims))
+
+        simList
