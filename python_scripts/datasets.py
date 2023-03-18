@@ -340,13 +340,15 @@ def create_cinic10_set(dataPath="/data/CINIC10/test", examples=10, dtype="float6
 
 def create_imagenet_subset(
     data_dir,
+    split="validation",
     slice=None,
     examples=10,
     dtype="float64",
     preprocFun=None,
     save_dir=None,
 ):
-    split = f"validation{slice}" if slice is not None else "validation"
+    
+    split = f"{split}{slice}" if slice is not None else split
     dataset = tfds.load(
         "imagenet2012",
         split=split,
@@ -357,14 +359,16 @@ def create_imagenet_subset(
 
     # Create dictionary for examples
     outImgs = {i: [] for i in range(1000)}
+    sliceCount = 0
     for example in dataset.take(len(dataset)):
+        sliceCount += 1
         img, idx = example
 
         idx = int(idx.numpy())
         # Check if there are enough examples and add
         if len(outImgs[idx]) < examples:
             if preprocFun is not None:
-                img = preprocFun(img, idx)
+                img = preprocFun(img)
             outImgs[idx].append(img)
 
         # Check if we have enough examples
@@ -376,8 +380,15 @@ def create_imagenet_subset(
         for i in range(1000):
             for j, img in enumerate(outImgs[i]):
                 PIL.Image.fromarray(img.numpy()).save(save_dir + f"/{i}_{j}.png")
+
+    print(f"Looked through {sliceCount} images to fulfill requirements.")
     return outImgs
 
+def preproc_imagenet(img, preprocFun, size):
+    """Just does specific rescaling"""
+    preprocImg = tf.keras.preprocessing.image.smart_resize(img, size)
+    preprocImg = preprocFun(preprocImg)
+    return preprocImg
 
 def collect_big_cifar10(output_dir):
     """
@@ -432,27 +443,29 @@ if __name__ == "__main__":
     # )
     # np.save("../outputs/masterOutput/labels.npy", labels)
 
-    # preproc = tf.keras.applications.mobilenet_v3.preprocess_input
-    # data, labels = create_imagenet_set(preprocFun=preproc, examples=10)
-    # np.save("../outputs/masterOutput/bigDataset.npy", data)
-    # np.save("../outputs/masterOutput/bigLabels.npy", labels)
+    preproc = lambda x: preproc_imagenet(x, tf.keras.applications.resnet50.preprocess_input, (480, 480))
+    data = create_imagenet_subset('/data/tensorflow_datasets', preprocFun=preproc, examples=1, split="validation", slice = '[6258:]')
+    data = [np.expand_dims(val[0].numpy(), 0) for val in data.values()]
+    data = np.concatenate(data)
+    np.save("../outputs/masterOutput/bigDatasetTestResnet.npy", data)
+    #np.save("../outputs/masterOutput/bigLabelsValVGG.npy", labels)
     # model = tf.keras.applications.MobileNetV3Small(input_shape=(224, 224, 3))
     # model.compile(metrics=["top_k_categorical_accuracy"])
     # results = model.evaluate(data, labels)
     # print(results)
 
     # Test imagenet
-    preprocFun = preproc(
-        shape=(32, 32, 3),
-        dtype=tf.float32,
-        # scale=1.0 / 255,
-        # offset=0,
-        labels=False,
-    )
+    # preprocFun = preproc(
+    #     shape=(32, 32, 3),
+    #     dtype=tf.float32,
+    #     # scale=1.0 / 255,
+    #     # offset=0,
+    #     labels=False,
+    # )
 
-    data = get_flat_dataset("/data/kriegset", preprocFun)
-    data = np.concatenate(list(data.as_numpy_iterator()))
-    np.save("../outputs/masterOutput/kriegsetDataSmall.npy", data)
+    # data = get_flat_dataset("/data/kriegset", preprocFun)
+    # data = np.concatenate(list(data.as_numpy_iterator()))
+    # np.save("../outputs/masterOutput/kriegsetDataSmall.npy", data)
     # data = get_imagenet_set(preprocFun, 256)
 
     # random.seed(2021)
@@ -494,10 +507,10 @@ if __name__ == "__main__":
     # imgs
 
     # collect_big_cifar10("/data/CINIC10Original")
-    random.seed(2021)
-    img, labels = create_cinic10_set("/data/CINIC10Original", examples=100)
-    np.save("../outputs/masterOutput/cinicData.npy", img)
-    np.save("../outputs/masterOutput/cinicLabels.npy", labels)
+    # random.seed(2021)
+    # img, labels = create_cinic10_set("/data/CINIC10Original", examples=100)
+    # np.save("../outputs/masterOutput/cinicData.npy", img)
+    # np.save("../outputs/masterOutput/cinicLabels.npy", labels)
 
     # # Combine all images into array
     # imgs = []

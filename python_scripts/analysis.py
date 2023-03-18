@@ -7,6 +7,8 @@ import glob
 import pandas as pd
 import numba as nb
 import itertools
+import re
+import json
 
 from tensorflow.python.ops.gen_array_ops import parallel_concat
 
@@ -367,14 +369,22 @@ def correspondence_test(
     return winners
 
 
-def make_allout_model(model):
+def make_allout_model(model, method="no_dropout"):
     """
     Creates a model with outputs at every layer that is not dropout.
     """
     inp = model.input
 
-    modelOuts = [layer.output for layer in model.layers if "dropout" not in layer.name]
-
+    if method == "no_dropout":
+        modelOuts = [layer.output for layer in model.layers if "dropout" not in layer.name]
+    elif method == "relu":
+        modelOuts = [layer.output 
+                    for layer in model.layers 
+                    if hasattr(layer, 'activation') and  
+                        layer.activation.__name__ == 'relu']
+    else:
+        raise ValueError(f"Method {method} not recognized.")
+    
     return Model(inputs=inp, outputs=modelOuts)
 
 
@@ -443,17 +453,28 @@ def get_trajectories(directory, file_str="*", file_name=None):
 
 def get_model_from_args(args, return_model=True, modelType="seed"):
     # Get model
-    if hasattr(args, "model_name") and args.model_name == "vgg":
+    if hasattr(args, "model_name") and args.model_name == "vgg16":
         model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
         model.compile(metrics=["top_k_categorical_accuracy"])
         print(f"Model loaded: vgg16", flush=True)
         model.summary()
         return model, "vgg16", "."
-    elif hasattr(args, "model_name") and args.model_name == "resnet":
+    elif hasattr(args, "model_name") and args.model_name == "vgg19":
+        model = tf.keras.applications.vgg19.VGG19(input_shape=(224, 224, 3))
+        model.compile(metrics=["top_k_categorical_accuracy"])
+        print(f"Model loaded: vgg19", flush=True)
+        model.summary()
+        return model, "vgg19", "."
+    elif hasattr(args, "model_name") and args.model_name == "resnet50":
         model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
         model.compile(metrics=["top_k_categorical_accuracy"])
         print(f"Model loaded: resnet50", flush=True)
         return model, "resnet50", "."
+    elif hasattr(args, "model_name") and args.model_name == "resnet101":
+        model = tf.keras.applications.resnet.ResNet101(input_shape=(224, 224, 3))
+        model.compile(metrics=["top_k_categorical_accuracy"])
+        print(f"Model loaded: resnet101", flush=True)
+        return model, "resnet101", "."
     elif hasattr(args, "model_dir"):
         # List models in model_dir
         modelList = glob.glob(os.path.join(args.model_dir, "*.pb"))
@@ -779,16 +800,51 @@ def get_seed_model_sims(modelSeeds, repDir, layer, preprocFun, simFun, noise=Non
     return modelSims
 
 
-def find_matching_layers(dataset, preproc_fun, sim_fun, model1, model2):
+def find_matching_layers(model1Dir, model2Dir, preproc_fun, sim_fun):
     """
-    Return a dictionary of corresponding layers between model1 and model2. For
-    each valid layer of model1, we will find the most similar layer in model2
-    given the dataset's representations using the preproc_fun and the sim_fun.
-    This means that multiple layers from model2 can map to a single layer of
-    model1.
+    Return a dictionary of corresponding layers between model1 and model2 based
+    on the representations in their directory. The representations are processed
+    using the preproc_fun and the sim_fun.
     """
-    # Get all the valid layers of model1
-    model1.layers
+    # Get and load representations
+    model1Paths = glob.glob(os.path.join(model1Dir, "*.npy"))
+    model2Paths = glob.glob(os.path.join(model2Dir, "*.npy"))
+    model1Reps = [np.load(rep) for rep in model1Paths]
+    model1Layers = [int(re.findall("[0-9]+(?=\.)", rep)[0]) for rep in model1Paths]
+    model2Reps = [np.load(rep) for rep in model2Paths]
+    model2Layers = [int(re.findall("[0-9]+(?=\.)", rep)[0]) for rep in model2Paths]
+
+    # Sort by layer
+    model1SortedIdx = np.argsort(model1Layers)
+    model2SortedIdx = np.argsort(model2Layers)
+    model1Reps = [model1Reps[i] for i in model1SortedIdx]
+    model2Reps = [model2Reps[i] for i in model2SortedIdx]
+    model1Layers = [model1Layers[i] for i in model1SortedIdx]
+    model2Layers = [model2Layers[i] for i in model2SortedIdx]
+
+    # Fix the similarity functions if they're a list
+    if isinstance(preproc_fun, list):
+        preproc_fun = preproc_fun[0]
+    if isinstance(sim_fun, list):
+        sim_fun = sim_fun[0]
+
+    # Preallocate array for similarity matrix
+    simMat = np.zeros(shape=(len(model1Reps), len(model2Reps)))
+    # Loop through and calculate similarities
+    for i, rep1 in enumerate(model1Reps):
+        rep1 = preproc_fun(rep1)
+        for j, rep2 in enumerate(model2Reps):
+            rep2 = preproc_fun(rep2)
+            simMat[i, j] = sim_fun(rep1, rep2)
+
+    # Create dictionary where the keys are the layers from model1
+    layerMatch = {layer: [] for layer in model1Layers}
+    for i, layer in enumerate(model2Layers):
+        # Find the model1 layer that is most similar
+        maxIdx = np.argmax(simMat[:, i])
+        layerMatch[model1Layers[maxIdx]].append(layer)
+
+    return layerMatch
 
 
 if __name__ == "__main__":
@@ -808,7 +864,7 @@ if __name__ == "__main__":
         "--model_name",
         type=str,
         help="Model name to load",
-        choices=["vgg", "resnet"],
+        choices=['vgg', 'resnet', "vgg16", "vgg19", "resnet50", "resnet101"],
     )
     parser.add_argument(
         "--model_index",
@@ -936,8 +992,45 @@ if __name__ == "__main__":
         dataset = np.load(args.dataset_file)
         print(f"dataset shape: {dataset.shape}", flush=True)
 
-        # Run it!
-        get_reps_from_all(args.models_dir, dataset, args.output_dir)
+        if args.model_name is not None:
+            # Get model
+            model, modelName, _ = get_model_from_args(args, return_model=True)
+
+            # Rescale dataset if needed
+            if args.model_name in ["vgg16", "vgg19", 'resnet50', 'resnet101']:
+                dataset = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+
+            # Find all the layers with relu
+            modelInput = model.input
+            modelOuts = [
+                (i, layer.output) 
+                for i, layer in enumerate(model.layers) 
+                if hasattr(layer, 'activation') and  
+                    layer.activation.__name__ == 'relu'
+            ]
+            for i, layer in modelOuts:
+                outPath = os.path.join(args.reps_dir, f"{modelName}l{i}.npy")
+                if os.path.exists(outPath):
+                    print(f"Layer {i} already exists, skipping", flush=True)
+                    continue
+
+                # VGG is so big it has to be done on CPU but at least we have huge memory
+                device = "/CPU:0" if args.model_name in ['vgg16', 'vgg19'] else "/GPU:1"
+                batchSize = 512 if args.model_name in ['vgg16', 'vgg19'] else 32
+                with tf.device(device):
+                    tmpModel = Model(modelInput, layer)
+                    rep = tmpModel.predict(dataset, batch_size=batchSize)
+
+                if len(rep.shape) == 4:
+                    rep = np.mean(rep, axis=(1, 2))
+
+                # Save the representation
+                np.save(outPath, rep)
+
+        elif args.models_dir is not None:
+            # Run it!
+            get_reps_from_all(args.models_dir, dataset, args.output_dir)
+
     elif args.analysis == "seedSimMat":
         print("Creating model similarity matrix.", flush=True)
         preprocFuns, simFuns, simNames = get_funcs(args.simSet)
@@ -989,28 +1082,20 @@ if __name__ == "__main__":
         assert len(preprocFun) == 1
         assert len(simFun) == 1
 
-        model2, _, _ = get_model_from_args(args, return_model=True)
-
-        if args.model_name == "vgg":
-            # Load vgg19
-            model1 = tf.keras.applications.vgg10.VGG19(input_shape=(224, 224, 3))
-            model1.compile(metrics=["top_k_categorical_accuracy"])
-        elif args.model_name == "resnet":
-            # Load resnet101
-            model1 = tf.keras.applications.resnet.ResNet101(input_shape=(224, 224, 3))
-            model1.compile(metrics=["top_k_categorical_accuracy"])
+        if args.model_name in ['vgg', "vgg16", 'vgg19']:
+            model1Dir = '../outputs/masterOutput/representations/vgg16/val'
+            model2Dir = '../outputs/masterOutput/representations/vgg19/val'
+        elif args.model_name in ['resnet', 'resnet50', 'resnet101']:
+            model1Dir = '../outputs/masterOutput/representations/resnet50/val'
+            model2Dir = '../outputs/masterOutput/representations/resnet101/val'
         else:
             raise ValueError("Invalid model name")
 
-        # Load dataset
-        print("Loading dataset", flush=True)
-        dataset = np.load(args.dataset_file)
-        print(f"dataset shape: {dataset.shape}", flush=True)
 
-        # Resize entire dataset
-        dataset = tf.keras.preprocessing.iamge.smart_resize(dataset, (224, 224))
+        matchDict = find_matching_layers(model1Dir, model2Dir, preprocFun, simFun)
 
-        matchDict = find_matching_layers(dataset, preprocFun, simFun, model1, model2)
+        with open(f"../outputs/masterOutput/layerMatch{args.model_name}.json", "w") as f:
+            json.dump(matchDict, f)
 
     else:
         # x = np.load("../outputs/masterOutput/representations/w0s0/w0s0l0.npy")
