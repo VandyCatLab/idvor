@@ -376,15 +376,18 @@ def make_allout_model(model, method="no_dropout"):
     inp = model.input
 
     if method == "no_dropout":
-        modelOuts = [layer.output for layer in model.layers if "dropout" not in layer.name]
+        modelOuts = [
+            layer.output for layer in model.layers if "dropout" not in layer.name
+        ]
     elif method == "relu":
-        modelOuts = [layer.output 
-                    for layer in model.layers 
-                    if hasattr(layer, 'activation') and  
-                        layer.activation.__name__ == 'relu']
+        modelOuts = [
+            layer.output
+            for layer in model.layers
+            if hasattr(layer, "activation") and layer.activation.__name__ == "relu"
+        ]
     else:
         raise ValueError(f"Method {method} not recognized.")
-    
+
     return Model(inputs=inp, outputs=modelOuts)
 
 
@@ -847,6 +850,41 @@ def find_matching_layers(model1Dir, model2Dir, preproc_fun, sim_fun):
     return layerMatch
 
 
+def get_matched_similarity(model1Dir, model2Dir, preprocFun, simFun, matchDict):
+    """
+    Return a dataframe for the similarity between each matched layer from
+    matchDict. The representations are loaded from model1Dir and model2Dir and
+    similarity is found using preprocFun and simFun.
+    """
+    df = pd.DataFrame(columns=["model1_layer", "model2_layer", "similarity"])
+
+    # Get model name from dir
+    model1Name = model1Dir.split("/")[-2]
+    model2Name = model2Dir.split("/")[-2]
+
+    for model1Layer, model2Layers in matchDict.items():
+        for model2Layer in model2Layers:
+            rep1 = np.load(os.path.join(model1Dir, f"{model1Name}l{model1Layer}.npy"))
+            rep2 = np.load(os.path.join(model2Dir, f"{model2Name}l{model2Layer}.npy"))
+            rep1 = preprocFun(rep1)
+            rep2 = preprocFun(rep2)
+            sim = simFun(rep1, rep2)
+            df = pd.concat(
+                (
+                    df,
+                    pd.DataFrame(
+                        {
+                            "model1_layer": [model1Layer],
+                            "model2_layer": [model2Layer],
+                            "similarity": [sim],
+                        }
+                    ),
+                )
+            )
+
+    return df
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -858,13 +896,20 @@ if __name__ == "__main__":
         "-a",
         type=str,
         help="type of analysis to run",
-        choices=["correspondence", "getReps", "seedSimMat", "itemSimMat", "layerMatch"],
+        choices=[
+            "correspondence",
+            "getReps",
+            "seedSimMat",
+            "itemSimMat",
+            "layerMatch",
+            "matchedSimilarity",
+        ],
     )
     parser.add_argument(
         "--model_name",
         type=str,
         help="Model name to load",
-        choices=['vgg', 'resnet', "vgg16", "vgg19", "resnet50", "resnet101"],
+        choices=["vgg", "resnet", "vgg16", "vgg19", "resnet50", "resnet101"],
     )
     parser.add_argument(
         "--model_index",
@@ -997,16 +1042,15 @@ if __name__ == "__main__":
             model, modelName, _ = get_model_from_args(args, return_model=True)
 
             # Rescale dataset if needed
-            if args.model_name in ["vgg16", "vgg19", 'resnet50', 'resnet101']:
+            if args.model_name in ["vgg16", "vgg19", "resnet50", "resnet101"]:
                 dataset = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
 
             # Find all the layers with relu
             modelInput = model.input
             modelOuts = [
-                (i, layer.output) 
-                for i, layer in enumerate(model.layers) 
-                if hasattr(layer, 'activation') and  
-                    layer.activation.__name__ == 'relu'
+                (i, layer.output)
+                for i, layer in enumerate(model.layers)
+                if hasattr(layer, "activation") and layer.activation.__name__ == "relu"
             ]
             for i, layer in modelOuts:
                 outPath = os.path.join(args.reps_dir, f"{modelName}l{i}.npy")
@@ -1015,8 +1059,8 @@ if __name__ == "__main__":
                     continue
 
                 # VGG is so big it has to be done on CPU but at least we have huge memory
-                device = "/CPU:0" if args.model_name in ['vgg16', 'vgg19'] else "/GPU:1"
-                batchSize = 512 if args.model_name in ['vgg16', 'vgg19'] else 32
+                device = "/CPU:0" if args.model_name in ["vgg16", "vgg19"] else "/GPU:1"
+                batchSize = 512 if args.model_name in ["vgg16", "vgg19"] else 32
                 with tf.device(device):
                     tmpModel = Model(modelInput, layer)
                     rep = tmpModel.predict(dataset, batch_size=batchSize)
@@ -1082,21 +1126,54 @@ if __name__ == "__main__":
         assert len(preprocFun) == 1
         assert len(simFun) == 1
 
-        if args.model_name in ['vgg', "vgg16", 'vgg19']:
-            model1Dir = '../outputs/masterOutput/representations/vgg16/val'
-            model2Dir = '../outputs/masterOutput/representations/vgg19/val'
-        elif args.model_name in ['resnet', 'resnet50', 'resnet101']:
-            model1Dir = '../outputs/masterOutput/representations/resnet50/val'
-            model2Dir = '../outputs/masterOutput/representations/resnet101/val'
+        if args.model_name in ["vgg", "vgg16", "vgg19"]:
+            model1Dir = "../outputs/masterOutput/representations/vgg16/val"
+            model2Dir = "../outputs/masterOutput/representations/vgg19/val"
+        elif args.model_name in ["resnet", "resnet50", "resnet101"]:
+            model1Dir = "../outputs/masterOutput/representations/resnet50/val"
+            model2Dir = "../outputs/masterOutput/representations/resnet101/val"
         else:
             raise ValueError("Invalid model name")
 
-
         matchDict = find_matching_layers(model1Dir, model2Dir, preprocFun, simFun)
 
-        with open(f"../outputs/masterOutput/layerMatch{args.model_name}.json", "w") as f:
+        with open(
+            f"../outputs/masterOutput/layerMatch{args.model_name}.json", "w"
+        ) as f:
             json.dump(matchDict, f)
+    elif args.analysis == "matchedSimilarity":
+        print("Performing matched layer similarity analysis.", flush=True)
+        preprocFun, simFun, _ = get_funcs(args.simSet)
+        assert len(preprocFun) == 1
+        assert len(simFun) == 1
 
+        # Unlist functions
+        preprocFun = preprocFun[0]
+        simFun = simFun[0]
+
+        if args.model_name in ["vgg", "vgg16", "vgg19"]:
+            model1Dir = "../outputs/masterOutput/representations/vgg16/test"
+            model2Dir = "../outputs/masterOutput/representations/vgg19/test"
+            matchFile = "../outputs/masterOutput/layerMatchvgg.json"
+        elif args.model_name in ["resnet", "resnet50", "resnet101"]:
+            model1Dir = "../outputs/masterOutput/representations/resnet50/test"
+            model2Dir = "../outputs/masterOutput/representations/resnet101/test"
+            matchFile = "../outputs/masterOutput/layerMatchresnet.json"
+        else:
+            raise ValueError("Invalid model name")
+
+        with open(matchFile, "r") as f:
+            matchDict = json.load(f)
+
+        # The smaller model1 is the key
+        simDf = get_matched_similarity(
+            model1Dir, model2Dir, preprocFun, simFun, matchDict
+        )
+
+        # Save sim DF
+        simDf.to_csv(
+            f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
+        )
     else:
         # x = np.load("../outputs/masterOutput/representations/w0s0/w0s0l0.npy")
         # y = np.load("../outputs/masterOutput/representations/w1s1/w1s1l0.npy")
