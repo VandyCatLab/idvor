@@ -13,6 +13,7 @@ from tensorflow.keras.datasets import cifar10
 import analysis, datasets
 import pandas as pd
 import os
+from scipy.stats import norm
 
 
 def yield_transforms(
@@ -329,28 +330,11 @@ def yield_big_transforms(
     dataset,
     versions=100,
 ):
-    ds = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
-
-    def _load_images(path):
-        img = tf.io.read_file(path)
-        img = tf.image.decode_png(img, channels=3)
-
-        # Resize to target
-        if tf.greater(tf.shape(img)[0], tf.shape(img)[1]):
-            # Resize based on height
-            img = tf.image.resize(img, (10000, 224), preserve_aspect_ratio=True)
-        else:
-            # Resize based on width
-            img = tf.image.resize(img, (224, 10000), preserve_aspect_ratio=True)
-        img = tf.image.resize_with_crop_or_pad(img, 224, 224)
-
-        # Preprocess
-        img = preproc_fun(img)
-
-        return img
-
-    ds = ds.map(_load_images)
-    ds = ds.batch(32)
+    """Unlike previous function, this one acts on preprocessed images array."""
+    origShape = dataset.shape
+    with tf.device("/cpu:0"):
+        ds = tf.keras.layers.CenterCrop(224, 224)(dataset)
+        df = preproc_fun(ds)
 
     # Set model to output reps at selected layer
     inp = model.input
@@ -361,12 +345,33 @@ def yield_big_transforms(
     # Get reps for originals
     rep1 = model.predict(ds, verbose=0)
 
+    eigVals = np.array([115.25870013, 35.37227674, 17.20782363])
+    eigVecs = np.array(
+        [
+            [-0.58215351, 0.69303716, -0.42520205],
+            [-0.58321022, 0.00846138, 0.81227719],
+            [-0.56653607, -0.72085221, -0.39926053],
+        ]
+    )
+
     if transform == "maxAug":
-        transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
+        # Calculate extreme color shift values
+        colorMax = np.matmul(eigVecs, norm.ppf(0.975, loc=0, scale=0.1) * eigVals)
+        colorMax = np.concatenate(
+            [
+                np.tile(colorMax[0], (224, 224, 1)),
+                np.tile(colorMax[1], (224, 224, 1)),
+                np.tile(colorMax[2], (224, 224, 1)),
+            ],
+            axis=2,
+        )
 
         def _load_images_maxAug(path):
-            img = tf.io.read_file(path)
-            img = tf.image.decode_png(img, channels=3)
+            img = tf.keras.preprocessing.image.smart_resize(img, (224, 224))
+            img = preproc_fun(img)
+
+            # Flip image
+            img = tf.image.flip_left_right(img)
 
         raise NotImplementedError
 
@@ -375,13 +380,6 @@ def yield_big_transforms(
         transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
 
         def _load_images_aug(path):
-            eigVals = [115.25870013, 35.37227674, 17.20782363]
-            eigVecs = [
-                [-0.58215351, 0.69303716, -0.42520205],
-                [-0.58321022, 0.00846138, 0.81227719],
-                [-0.56653607, -0.72085221, -0.39926053],
-            ]
-
             img = tf.io.read_file(path)
             img = tf.image.decode_png(img, channels=3)
 
@@ -874,13 +872,13 @@ if __name__ == "__main__":
             )
             data.to_csv(outPath, index=False)
     else:  # Main
-        model = f"../outputs/masterOutput/models/w0s0.pb"
-        model = tf.keras.models.load_model(model)
-        dataset = np.load("../outputs/masterOutput/dataset.npy")
+        model = tf.keras.applications.vgg16.VGG16()
+        dataset = np.load("../outputs/masterOutput/bigDatasetTestVGG.npy")
         preprocFuns, simFuns, analysisNames = analysis.get_funcs("eucRsa")
+        yield_big_transforms("maxAug", model, lambda x: x, 9, dataset)
         simList = []
         for v in range(6):
-            transforms = yield_transforms("maxAug", model, 9, dataset, False, v)
+            transforms = yield_big_transforms("maxAug", model, lambda x: x, 9, dataset)
 
             for _, rep1, rep2 in transforms:
                 simDirs = []
