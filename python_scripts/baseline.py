@@ -329,6 +329,7 @@ def yield_big_transforms(
     layer_idx,
     dataset,
     versions=100,
+    options=None,
 ):
     """Unlike previous function, this one acts on preprocessed images array."""
     origShape = dataset.shape
@@ -347,7 +348,7 @@ def yield_big_transforms(
         rep1 = model.predict(ds, verbose=0)
 
     if len(rep1.shape) == 4:
-        rep1 = np.mean(rep1, axis=(1, 2))    
+        rep1 = np.mean(rep1, axis=(1, 2))
 
     eigVals = np.array([115.25870013, 35.37227674, 17.20782363])
     eigVecs = np.array(
@@ -380,99 +381,89 @@ def yield_big_transforms(
             yCorner = origShape[2] - 224
 
             with tf.device("/cpu:0"):
-                print('Yielding top left + color')
+                print("Yielding top left + color")
                 rep2 = model.predict(ds[:, :224, :224, :] + colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding top left - color')
+                print("Yielding top left - color")
                 rep2 = model.predict(ds[:, :224, :224, :] - colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding bottom right + color')
+                print("Yielding bottom right + color")
                 rep2 = model.predict(ds[:, xCorner:, :224, :] + colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding bottom right - color')
+                print("Yielding bottom right - color")
                 rep2 = model.predict(ds[:, xCorner:, :224, :] - colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding top right + color')
+                print("Yielding top right + color")
                 rep2 = model.predict(ds[:, :224, yCorner:, :] + colorMax, verbose=0)
-                if len(rep2) == 4:  
+                if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding top right - color')
+                print("Yielding top right - color")
                 rep2 = model.predict(ds[:, :224, yCorner:, :] - colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding bottom left + color')
+                print("Yielding bottom left + color")
                 rep2 = model.predict(ds[:, xCorner:, yCorner:, :] + colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-                print('Yielding bottom left - color')
+                print("Yielding bottom left - color")
                 rep2 = model.predict(ds[:, xCorner:, yCorner:, :] - colorMax, verbose=0)
                 if len(rep2) == 4:
                     rep2 = np.mean(rep2, axis=(1, 2))
                 yield rep2
 
-
         yield 1, rep1, _variant_reps(ds)
 
     elif transform == "random":
         print(f" - Yielding {versions} repeats.")
-        transDs = tf.data.Dataset.list_files(dataset + "/*.png", shuffle=False)
-
-        def _load_images_aug(path):
-            img = tf.io.read_file(path)
-            img = tf.image.decode_png(img, channels=3)
-
-            # Maybe flip image
-            img = tf.image.random_flip_left_right(img)
-
-            # Random resize and crop
-            randSize = tf.random.uniform(
-                shape=[], minval=256, maxval=512, dtype=tf.int32
-            )
-
-            img = tf.cond(
-                tf.greater(tf.shape(img)[0], tf.shape(img)[1]),
-                lambda: tf.image.resize(
-                    img, (10000, randSize), preserve_aspect_ratio=True
-                ),
-                lambda: tf.image.resize(
-                    img, (randSize, 10000), preserve_aspect_ratio=True
-                ),
-            )
-
-            img = tf.image.random_crop(img, (224, 224, 3))
-
-            # Preprocess
-            img = preproc_fun(img)
-
-            # Add batch dimension
-            img = tf.expand_dims(img, axis=0)
-
-            return img
-
-        transDs = transDs.map(_load_images_aug)
-        transDs = transDs.batch(32)
-
+        numImgs = ds.shape[0]
         for v in range(versions):
-            # Get reps for transformed images
-            rep2 = model.predict(transDs, verbose=0)
+            # Random scale
+            with tf.device("/cpu:0"):
+                size = np.random.randint(options["scaleLow"], options["scaleHigh"] + 1)
+                ds = tf.image.resize(dataset, (size, size))
+
+                # Random crop, note that this will crop everything together
+                ds = tf.image.random_crop(ds, (numImgs, 224, 224, 3))
+
+                # Maybe flip images
+                if np.random.rand() > 0.5:
+                    ds = tf.image.flip_left_right(ds)
+
+                # Random color
+                alphas = np.random.normal(scale=0.1, size=3)
+                color = np.matmul(eigVecs, alphas * eigVals)
+                color = np.concatenate(
+                    [
+                        np.tile(color[0], (224, 224, 1)),
+                        np.tile(color[1], (224, 224, 1)),
+                        np.tile(color[2], (224, 224, 1)),
+                    ],
+                    axis=2,
+                )
+                ds = ds + color
+
+            # Make representations
+            rep2 = model.predict(ds, verbose=0)
+            if len(rep2.shape) == 4:
+                rep2 = np.mean(rep2, axis=(1, 2))
 
             yield v, rep1, rep2
 
@@ -749,8 +740,17 @@ if __name__ == "__main__":
             for layer in args.layer_index:
                 print(f"Working on layer {layer}.", flush=True)
                 # Get transforms generators
-                if modelName in ['vgg', 'vgg16', 'vgg19', 'resnet', 'resnet50', 'resnet101']:
-                    transforms = yield_big_transforms("maxAug", model, lambda x: x, int(layer), dataset)
+                if modelName in [
+                    "vgg",
+                    "vgg16",
+                    "vgg19",
+                    "resnet",
+                    "resnet50",
+                    "resnet101",
+                ]:
+                    transforms = yield_big_transforms(
+                        "maxAug", model, lambda x: x, int(layer), dataset
+                    )
                 else:
                     transforms = yield_transforms(
                         args.analysis,
@@ -778,7 +778,12 @@ if __name__ == "__main__":
                         for rep in rep2:
                             simDirs += [
                                 analysis.multi_analysis(
-                                    rep1, rep, preprocFuns, simFuns, analysisNames, verbose=True
+                                    rep1,
+                                    rep,
+                                    preprocFuns,
+                                    simFuns,
+                                    analysisNames,
+                                    verbose=True,
                                 )
                             ]
 
@@ -798,14 +803,35 @@ if __name__ == "__main__":
             for layer in args.layer_index:
                 print(f"Working on layer {layer}.", flush=True)
                 # Get transforms generators
-                transforms = yield_transforms(
-                    args.analysis,
-                    model,
-                    int(layer),
-                    dataset,
-                    return_aug=False,
-                    versions=args.versions,
-                )
+                if modelName in ["vgg", "vgg16", "vgg19"]:
+                    transforms = yield_big_transforms(
+                        "random",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options={"scaleLow": 256, "scaleHigh": 512},
+                    )
+                elif modelName in ["resnet", "resnet50", "resnet101"]:
+                    transforms = yield_big_transforms(
+                        "random",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options={"scaleLow": 256, "scaleHigh": 480},
+                    )
+                else:
+                    transforms = yield_transforms(
+                        args.analysis,
+                        model,
+                        int(layer),
+                        dataset,
+                        return_aug=False,
+                        versions=args.versions,
+                    )
 
                 # Create dataframe
                 simDf = pd.DataFrame(columns=["repeat"] + analysisNames)
@@ -820,7 +846,12 @@ if __name__ == "__main__":
                     for v, rep1, rep2 in transforms:
                         # Calculate similarity for each direction
                         sims = analysis.multi_analysis(
-                            rep1, rep2, preprocFuns, simFuns, analysisNames
+                            rep1,
+                            rep2,
+                            preprocFuns,
+                            simFuns,
+                            analysisNames,
+                            verbose=True,
                         )
 
                         # Save similarity into dataframe
@@ -836,7 +867,6 @@ if __name__ == "__main__":
 
                     # Save
                     simDf.to_csv(outPath, index=False)
-                    simDf
                 else:
                     print(f"{outPath} already exists, skipping.", flush=True)
         elif args.analysis == "accuracy":
