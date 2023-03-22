@@ -333,8 +333,8 @@ def yield_big_transforms(
     """Unlike previous function, this one acts on preprocessed images array."""
     origShape = dataset.shape
     with tf.device("/cpu:0"):
-        ds = tf.keras.layers.CenterCrop(224, 224)(dataset)
-        df = preproc_fun(ds)
+        ds = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+        ds = preproc_fun(ds)
 
     # Set model to output reps at selected layer
     inp = model.input
@@ -343,7 +343,11 @@ def yield_big_transforms(
     model = Model(inputs=inp, outputs=out)
 
     # Get reps for originals
-    rep1 = model.predict(ds, verbose=0)
+    with tf.device("/cpu:0"):
+        rep1 = model.predict(ds, verbose=0)
+
+    if len(rep1.shape) == 4:
+        rep1 = np.mean(rep1, axis=(1, 2))    
 
     eigVals = np.array([115.25870013, 35.37227674, 17.20782363])
     eigVecs = np.array(
@@ -355,25 +359,77 @@ def yield_big_transforms(
     )
 
     if transform == "maxAug":
-        # Calculate extreme color shift values
-        colorMax = np.matmul(eigVecs, norm.ppf(0.975, loc=0, scale=0.1) * eigVals)
-        colorMax = np.concatenate(
-            [
-                np.tile(colorMax[0], (224, 224, 1)),
-                np.tile(colorMax[1], (224, 224, 1)),
-                np.tile(colorMax[2], (224, 224, 1)),
-            ],
-            axis=2,
-        )
+        # Flip images
+        ds = tf.image.flip_left_right(dataset)
 
-        def _load_images_maxAug(path):
-            img = tf.keras.preprocessing.image.smart_resize(img, (224, 224))
-            img = preproc_fun(img)
+        # Crop the corner images then add/sub color
+        def _variant_reps(ds):
+            # Calculate extreme color shift values
+            colorMax = np.matmul(eigVecs, norm.ppf(0.975, loc=0, scale=0.1) * eigVals)
+            colorMax = np.concatenate(
+                [
+                    np.tile(colorMax[0], (224, 224, 1)),
+                    np.tile(colorMax[1], (224, 224, 1)),
+                    np.tile(colorMax[2], (224, 224, 1)),
+                ],
+                axis=2,
+            )
 
-            # Flip image
-            img = tf.image.flip_left_right(img)
+            # Calculate coordinates for corner images
+            xCorner = origShape[1] - 224
+            yCorner = origShape[2] - 224
 
-        raise NotImplementedError
+            with tf.device("/cpu:0"):
+                print('Yielding top left + color')
+                rep2 = model.predict(ds[:, :224, :224, :] + colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding top left - color')
+                rep2 = model.predict(ds[:, :224, :224, :] - colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding bottom right + color')
+                rep2 = model.predict(ds[:, xCorner:, :224, :] + colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding bottom right - color')
+                rep2 = model.predict(ds[:, xCorner:, :224, :] - colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding top right + color')
+                rep2 = model.predict(ds[:, :224, yCorner:, :] + colorMax, verbose=0)
+                if len(rep2) == 4:  
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding top right - color')
+                rep2 = model.predict(ds[:, :224, yCorner:, :] - colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding bottom left + color')
+                rep2 = model.predict(ds[:, xCorner:, yCorner:, :] + colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+                print('Yielding bottom left - color')
+                rep2 = model.predict(ds[:, xCorner:, yCorner:, :] - colorMax, verbose=0)
+                if len(rep2) == 4:
+                    rep2 = np.mean(rep2, axis=(1, 2))
+                yield rep2
+
+
+        yield 1, rep1, _variant_reps(ds)
 
     elif transform == "random":
         print(f" - Yielding {versions} repeats.")
@@ -693,15 +749,18 @@ if __name__ == "__main__":
             for layer in args.layer_index:
                 print(f"Working on layer {layer}.", flush=True)
                 # Get transforms generators
-                transforms = yield_transforms(
-                    args.analysis,
-                    model,
-                    int(layer),
-                    dataset,
-                    return_aug=False,
-                    versions=args.versions,
-                    slice=args.version_slice,
-                )
+                if modelName in ['vgg', 'vgg16', 'vgg19', 'resnet', 'resnet50', 'resnet101']:
+                    transforms = yield_big_transforms("maxAug", model, lambda x: x, int(layer), dataset)
+                else:
+                    transforms = yield_transforms(
+                        args.analysis,
+                        model,
+                        int(layer),
+                        dataset,
+                        return_aug=False,
+                        versions=args.versions,
+                        slice=args.version_slice,
+                    )
 
                 # Create dataframe
                 simDf = pd.DataFrame(columns=["version"] + analysisNames)
@@ -717,10 +776,9 @@ if __name__ == "__main__":
                         # Calculate similarity for each direction
                         simDirs = []
                         for rep in rep2:
-                            rep = np.array(rep)
                             simDirs += [
                                 analysis.multi_analysis(
-                                    rep1, rep, preprocFuns, simFuns, analysisNames
+                                    rep1, rep, preprocFuns, simFuns, analysisNames, verbose=True
                                 )
                             ]
 
@@ -733,6 +791,7 @@ if __name__ == "__main__":
 
                     # Save
                     simDf.to_csv(outPath, index=False)
+                    simDf
                 else:
                     print(f"{outPath} already exists, skipping.", flush=True)
         elif args.analysis == "random":
@@ -777,6 +836,7 @@ if __name__ == "__main__":
 
                     # Save
                     simDf.to_csv(outPath, index=False)
+                    simDf
                 else:
                     print(f"{outPath} already exists, skipping.", flush=True)
         elif args.analysis == "accuracy":
@@ -877,20 +937,19 @@ if __name__ == "__main__":
         preprocFuns, simFuns, analysisNames = analysis.get_funcs("eucRsa")
         yield_big_transforms("maxAug", model, lambda x: x, 9, dataset)
         simList = []
-        for v in range(6):
-            transforms = yield_big_transforms("maxAug", model, lambda x: x, 9, dataset)
+        transforms = yield_big_transforms("maxAug", model, lambda x: x, 9, dataset)
 
-            for _, rep1, rep2 in transforms:
-                simDirs = []
-                for rep in rep2:
-                    rep = np.array(rep)
-                    simDirs += [
-                        analysis.multi_analysis(
-                            rep1, rep, preprocFuns, simFuns, analysisNames
-                        )
-                    ]
-                sims = [list(sim.values())[0] for sim in simDirs]
+        for _, rep1, rep2 in transforms:
+            simDirs = []
+            for rep in rep2:
+                rep = np.array(rep)
+                simDirs += [
+                    analysis.multi_analysis(
+                        rep1, rep, preprocFuns, simFuns, analysisNames
+                    )
+                ]
+            sims = [list(sim.values())[0] for sim in simDirs]
 
-                simList.append(max(sims))
+            simList.append(max(sims))
 
         simList
