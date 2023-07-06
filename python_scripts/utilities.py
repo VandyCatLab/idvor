@@ -64,12 +64,10 @@ def correspondence_missing_optimizer(missing):
 
         modelN = np.array([len(count) for count in modelCounts])
         target = models.pop(np.argmax(modelN))
-        modelPairs[target] = list(
-            data["model1"].loc[data["model2"] == target]
-        ) + list(data["model2"].loc[data["model1"] == target])
-        data = data.loc[
-            (data["model1"] != target) & (data["model2"] != target)
-        ]
+        modelPairs[target] = list(data["model1"].loc[data["model2"] == target]) + list(
+            data["model2"].loc[data["model1"] == target]
+        )
+        data = data.loc[(data["model1"] != target) & (data["model2"] != target)]
 
     return modelPairs
 
@@ -89,9 +87,7 @@ def compile_augment(path, augment, layer):
     if augment == "color":
         df["version"] = (df["version"] - 25) * (3 / 50)
     elif "translate" in augment:
-        metricNames = [
-            name for name in df.columns if not name in ["version", "layer"]
-        ]
+        metricNames = [name for name in df.columns if not name in ["version", "layer"]]
         # Remove directions from metricNames
         metricNames = [name.split("-")[0] for name in metricNames]
         # Keep only unique names
@@ -163,9 +159,7 @@ def compile_baseline_dict(path, tests, layers, metrics):
                 for metric in metrics:
                     if testKey == "translate":  # Translation test
                         directions = ["left", "right", "up", "down"]
-                        dirKeys = [
-                            f"{metric}-{direction}" for direction in directions
-                        ]
+                        dirKeys = [f"{metric}-{direction}" for direction in directions]
                         df[metric] = df[dirKeys].mean(1)
                     for version in versions:
                         tmpData = df[metric].loc[df["version"] == version]
@@ -194,13 +188,9 @@ def compile_baseline_dict(path, tests, layers, metrics):
                             }
                         ]
 
-                        if (
-                            testKey == "translate"
-                        ):  # Add directions for translation
+                        if testKey == "translate":  # Add directions for translation
                             for i, dirCol in enumerate(dirKeys):
-                                metricData[metric][-1][
-                                    directions[i]
-                                ] = np.mean(
+                                metricData[metric][-1][directions[i]] = np.mean(
                                     df[dirCol].loc[df["version"] == version]
                                 )
 
@@ -377,10 +367,7 @@ def compile_training_traj(trajDir, pattern):
         log = [line for line in log if "val_accuracy" in line]
 
         # Just grab validation accuracy
-        valAcc = [
-            float(line.split(":")[-1].replace("\n", "").strip())
-            for line in log
-        ]
+        valAcc = [float(line.split(":")[-1].replace("\n", "").strip()) for line in log]
 
         # Get model name
         model = file.split("/")[-1].split(".")[0]
@@ -404,6 +391,25 @@ def compile_training_traj(trajDir, pattern):
 
 
 if __name__ == "__main__":
+    # List globs that match
+    modelName = "vgg16"
+    files = glob.glob(f"../outputs/masterOutput/baseline/{modelName}l*-random.csv")
+    df = pd.DataFrame()
+    for file in files:
+        tmp = pd.read_csv(file, index_col=0)
+        # Figure out what layer from file name
+        layer = int(file.split("/")[-1].split("l")[1].split("-")[0])
+        # Add layer column
+        tmp["layer"] = layer
+        df = pd.concat((df, tmp))
+
+    # Sort by layer
+    df = df.sort_values(by="layer")
+
+    # Save df
+    df.to_csv(f"../outputs/masterOutput/baseline/compiled/{modelName}-random.csv")
+    print(files)
+
     # layers = [2, 6, 10]
     # path = "../outputs/masterOutput/baseline/catDiff_max1-100"
     # df = compile_dropout(path, layers)
@@ -441,26 +447,33 @@ if __name__ == "__main__":
     #         f"../outputs/masterOutput/baseline/compiled/{augment}-kriegset.csv"
     #     )
 
-    path = "../outputs/masterOutput/correspondence/"
-    models_path = "../outputs/masterOutput/models/"
-    results, missing = compile_correspondence(path, models_path)
-    missing = correspondence_missing_optimizer(missing)
-    results.to_csv(f"../outputs/masterOutput/correspondence.csv")
-    missing
+    # path = "../outputs/masterOutput/correspondence/"
+    # models_path = "../outputs/masterOutput/models/"
+    # results, missing = compile_correspondence(path, models_path)
+    # missing = correspondence_missing_optimizer(missing)
+    # results.to_csv(f"../outputs/masterOutput/correspondence.csv")
+    # missing
 
-    path = "../outputs/masterOutput/correspondence/cka2/"
-    models_path = "../outputs/masterOutput/models/"
-    resultsCKA2, missing = compile_correspondence(path, models_path)
-    missing = correspondence_missing_optimizer(missing)
-    # Replace cka column with cka2 results
-    results.drop(columns="cka", inplace=True)
-    results[["cka"]] = resultsCKA2.cka
-    results.to_csv(f"../outputs/masterOutput/correspondence.csv")
-    missing
+    # path = "../outputs/masterOutput/correspondence/cka2/"
+    # models_path = "../outputs/masterOutput/models/"
+    # resultsCKA2, missing = compile_correspondence(path, models_path)
+    # missing = correspondence_missing_optimizer(missing)
+    # # Replace cka column with cka2 results
+    # results.drop(columns="cka", inplace=True)
+    # results[["cka"]] = resultsCKA2.cka
+    # results.to_csv(f"../outputs/masterOutput/correspondence.csv")
+    # missing
 
-    # modelType = "seedDiff"
-    # path = f"../outputs/masterOutput/baseline/{modelType}"
-    # augments = ["reflect", "translate-v5.0"]
+    # path = "../outputs/masterOutput/correspondence/pwcca/"
+    # models_path = "../outputs/masterOutput/models/"
+    # results, missing = compile_correspondence(path, models_path)
+    # missing = correspondence_missing_optimizer(missing)
+    # results.to_csv(f"../outputs/masterOutput/pwccaCorrespondence.csv")
+    # missing
+
+    # modelType = "itemDiff_max10"
+    # path = f"../outputs/masterOutput/baseline/itemDiff_max10"
+    # augments = ["random"]
     # layers = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     # for augment in augments:
     #     df = pd.DataFrame()
@@ -473,6 +486,17 @@ if __name__ == "__main__":
     #         f"../outputs/masterOutput/baseline/compiled/{augment}-{modelType}.csv"
     #     )
 
+    # path = "./outputs/masterOutput/baseline"
+    # layers = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    # df = pd.DataFrame()
+    # for layer in layers:
+    #     tmp = compile_augment(path, "random", layer)
+    #     # Add layer column
+    #     tmp["layer"] = layer
+    #     df = pd.concat((df, tmp))
+    # df.to_csv(
+    #     f"./outputs/masterOutput/baseline/compiled/random-seedDiff.csv"
+    # )
     # path = "../outputs/masterOutput/baseline/cinic/"
     # augments = ["color", "translate", "zoom", "reflect", "noise", "drop"]
     # for augment in augments:
