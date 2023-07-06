@@ -1030,8 +1030,6 @@ if __name__ == "__main__":
                 print("This pair is complete, skipping", flush=True)
 
     elif args.analysis == "getReps":
-        print("Getting representations each non-dropout layer", flush=True)
-
         # Load dataset
         print("Loading dataset", flush=True)
         dataset = np.load(args.dataset_file)
@@ -1047,11 +1045,19 @@ if __name__ == "__main__":
 
             # Find all the layers with relu
             modelInput = model.input
-            modelOuts = [
-                (i, layer.output)
-                for i, layer in enumerate(model.layers)
-                if hasattr(layer, "activation") and layer.activation.__name__ == "relu"
-            ]
+            if args.layer_index is None:
+                print("Getting representations each non-dropout layer", flush=True)
+                modelOuts = [
+                    (i, layer.output)
+                    for i, layer in enumerate(model.layers)
+                    if hasattr(layer, "activation")
+                    and layer.activation.__name__ == "relu"
+                ]
+            else:
+                print("Getting representations for specified layers", flush=True)
+                args.layer_index = [int(x) for x in args.layer_index]
+                modelOuts = [(i, model.layers[i].output) for i in args.layer_index]
+
             for i, layer in modelOuts:
                 outPath = os.path.join(args.reps_dir, f"{modelName}l{i}.npy")
                 if os.path.exists(outPath):
