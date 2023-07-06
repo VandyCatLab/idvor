@@ -711,6 +711,9 @@ def get_unstruct_model_sims(
     """
     # Get list of models
     models = glob.glob(os.path.join(repDir, "model*"))
+    # Only keep directories
+    models = [model for model in models if ".npy" not in model]
+
     # Strip model directories
     models = [model.split("/")[-1] for model in models]
 
@@ -1180,230 +1183,20 @@ if __name__ == "__main__":
         # x = preprocess_ckaNumba(x)
         # y = preprocess_ckaNumba(y)
 
-        x = np.random.rand(100, 100).astype("float32")
-        y = np.random.rand(100, 100).astype("float32")
+        x = np.random.rand(50, 1000).astype("float32")
+        y = np.random.rand(50, 1000).astype("float32")
 
-        def linKernel(x):
-            return x @ x.T
+        xCKA = preprocess_ckaNumba(x)
+        yCKA = preprocess_ckaNumba(y)
 
-        def dingCKA(A, B):
-            """
-            Computes Linear CKA distance bewteen representations A and B
-            FROM: https://github.com/js-d/sim_metric/blob/main/dists/scoring.py
-            """
-            similarity = np.linalg.norm(B @ A.T, ord="fro") ** 2
-            normalization = np.linalg.norm(A @ A.T, ord="fro") * np.linalg.norm(
-                B @ B.T, ord="fro"
-            )
+        print(f"CKA similarity: {do_linearCKANumba2(xCKA, yCKA)}")
 
-            return 1 - similarity / normalization
+        xRSA = preprocess_eucRsaNumba(x)
+        yRSA = preprocess_eucRsaNumba(y)
 
-        def jasonCKA(acts1, acts2):
-            """
-            Pre: acts must be shape (datapoints, neurons)
-            """
-            acts1 = acts1.copy()
-            acts2 = acts2.copy()
+        print(f"RSA similarity: {do_rsaNumba(xRSA, yRSA)}")
 
-            # Center X and Y
-            acts1 -= acts1.mean(axis=0)
-            acts2 -= acts2.mean(axis=0)
+        xCCA = preprocess_pwcca(x)
+        yCCA = preprocess_pwcca(y)
 
-            def _frobNorm(x):
-                return np.sum(np.absolute(x) ** 2) ** (1 / 2)
-
-            sim = _frobNorm(acts1.T @ acts2) ** 2
-            normalization = _frobNorm(acts1.T @ acts1) * _frobNorm(acts2.T @ acts2)
-            return sim / normalization
-
-        @nb.jit()
-        def oldCKA(acts1, acts2):
-            """
-            Pre: acts must be shape (datapoints, neurons)
-            """
-            n = acts1.shape[0]
-            centerMatrix = np.eye(n) - (np.ones((n, n)) / n)
-            centerMatrix = centerMatrix.astype(nb.float32)
-
-            # Top part
-            centeredX = np.dot(np.dot(acts1, acts1.T), centerMatrix)
-            centeredY = np.dot(np.dot(acts2, acts2.T), centerMatrix)
-            top = np.trace(np.dot(centeredX, centeredY)) / ((n - 1) ** 2)
-
-            # Bottom part
-            botLeft = np.trace(np.dot(centeredX, centeredX)) / ((n - 1) ** 2)
-            botRight = np.trace(np.dot(centeredY, centeredY)) / ((n - 1) ** 2)
-            bot = (botLeft * botRight) ** (1 / 2)
-
-            return top / bot
-
-        def centering(K):
-            n = K.shape[0]
-            unit = np.ones([n, n])
-            I = np.eye(n)
-            H = I - unit / n
-
-            return np.dot(
-                np.dot(H, K), H
-            )  # HKH are the same with KH, KH is the first centering, H(KH) do the second time, results are the sme with one time centering
-            # return np.dot(H, K)  # KH
-
-        def linear_HSIC(X, Y):
-            L_X = np.dot(X, X.T)
-            L_Y = np.dot(Y, Y.T)
-            return np.sum(centering(L_X) * centering(L_Y))
-
-        def linear_CKA(X, Y):
-            """FROM: https://github.com/yuanli2333/CKA-Centered-Kernel-Alignment"""
-            hsic = linear_HSIC(X, Y)
-            var1 = np.sqrt(linear_HSIC(X, X))
-            var2 = np.sqrt(linear_HSIC(Y, Y))
-
-            return hsic / (var1 * var2)
-
-        def unbiased_HSIC(K, L):
-            """Computes an unbiased estimator of HISC. This is equation (2) from the paper
-            From: https://towardsdatascience.com/do-different-neural-networks-learn-the-same-things-ac215f2103c3
-            """
-
-            # create the unit **vector** filled with ones
-            n = K.shape[0]
-            ones = np.ones(shape=(n))
-
-            # fill the diagonal entries with zeros
-            np.fill_diagonal(K, val=0)  # this is now K_tilde
-            np.fill_diagonal(L, val=0)  # this is now L_tilde
-
-            # first part in the square brackets
-            trace = np.trace(np.dot(K, L))
-
-            # middle part in the square brackets
-            nominator1 = np.dot(np.dot(ones.T, K), ones)
-            nominator2 = np.dot(np.dot(ones.T, L), ones)
-            denominator = (n - 1) * (n - 2)
-            middle = np.dot(nominator1, nominator2) / denominator
-
-            # third part in the square brackets
-            multiplier1 = 2 / (n - 2)
-            multiplier2 = np.dot(np.dot(ones.T, K), np.dot(L, ones))
-            last = multiplier1 * multiplier2
-
-            # complete equation
-            unbiased_hsic = 1 / (n * (n - 3)) * (trace + middle - last)
-
-            return unbiased_hsic
-
-        def unbiasedCKA(X, Y):
-            """Computes the CKA of two matrices. This is equation (1) from the paper"""
-
-            nominator = unbiased_HSIC(np.dot(X, X.T), np.dot(Y, Y.T))
-            denominator1 = unbiased_HSIC(np.dot(X, X.T), np.dot(X, X.T))
-            denominator2 = unbiased_HSIC(np.dot(Y, Y.T), np.dot(Y, Y.T))
-
-            cka = nominator / np.sqrt(denominator1 * denominator2)
-
-            return cka
-
-        def good_cka(X, Y):
-            # From https://goodresearch.dev/cka.html
-            # Implements linear CKA as in Kornblith et al. (2019)
-            X = X.copy()
-            Y = Y.copy()
-
-            # Center X and Y
-            X -= X.mean(axis=0)
-            Y -= Y.mean(axis=0)
-
-            # Calculate CKA
-            XTX = X.T.dot(X)
-            YTY = Y.T.dot(Y)
-            YTX = Y.T.dot(X)
-
-            return (YTX**2).sum() / np.sqrt((XTX**2).sum() * (YTY**2).sum())
-
-        def gram_linear(x):
-            """Compute Gram (kernel) matrix for a linear kernel.
-
-            Args:
-                x: A num_examples x num_features matrix of features.
-
-            Returns:
-                A num_examples x num_examples Gram matrix of examples.
-            """
-            return x.dot(x.T)
-
-        def center_gram(gram, unbiased=False):
-            """Center a symmetric Gram matrix.
-
-            This is equvialent to centering the (possibly infinite-dimensional) features
-            induced by the kernel before computing the Gram matrix.
-
-            Args:
-                gram: A num_examples x num_examples symmetric matrix.
-                unbiased: Whether to adjust the Gram matrix in order to compute an unbiased
-                estimate of HSIC. Note that this estimator may be negative.
-
-            Returns:
-                A symmetric matrix with centered columns and rows.
-            """
-            if not np.allclose(gram, gram.T):
-                raise ValueError("Input must be a symmetric matrix.")
-            gram = gram.copy()
-
-            if unbiased:
-                # This formulation of the U-statistic, from Szekely, G. J., & Rizzo, M.
-                # L. (2014). Partial distance correlation with methods for dissimilarities.
-                # The Annals of Statistics, 42(6), 2382-2412, seems to be more numerically
-                # stable than the alternative from Song et al. (2007).
-                n = gram.shape[0]
-                np.fill_diagonal(gram, 0)
-                means = np.sum(gram, 0, dtype=np.float64) / (n - 2)
-                means -= np.sum(means) / (2 * (n - 1))
-                gram -= means[:, None]
-                gram -= means[None, :]
-                np.fill_diagonal(gram, 0)
-            else:
-                means = np.mean(gram, 0, dtype=np.float64)
-                means -= np.mean(means) / 2
-                gram -= means[:, None]
-                gram -= means[None, :]
-
-            return gram
-
-        def cka(gram_x, gram_y, debiased=False):
-            """Compute CKA.
-
-            Args:
-                gram_x: A num_examples x num_examples Gram matrix.
-                gram_y: A num_examples x num_examples Gram matrix.
-                debiased: Use unbiased estimator of HSIC. CKA may still be biased.
-
-            from https://colab.research.google.com/github/google-research/google-research/blob/master/representation_similarity/Demo.ipynb
-
-            Returns:
-                The value of CKA between X and Y.
-            """
-            gram_x = center_gram(gram_x, unbiased=debiased)
-            gram_y = center_gram(gram_y, unbiased=debiased)
-
-            # Note: To obtain HSIC, this should be divided by (n-1)**2 (biased variant) or
-            # n*(n-3) (unbiased variant), but this cancels for CKA.
-            scaled_hsic = gram_x.ravel().dot(gram_y.ravel())
-
-            normalization_x = np.linalg.norm(gram_x)
-            normalization_y = np.linalg.norm(gram_y)
-            return scaled_hsic / (normalization_x * normalization_y)
-
-        print(f"Ding: {-1 * (dingCKA(x.T, y.T) - 1)}")
-        print(
-            f"My old implementation with kernel: {oldCKA(linKernel(x), linKernel(y))}"
-        )
-        print(f"My old implementation w/o kernel: {oldCKA(x, y)}")
-        print(f"Online implementation: {linear_CKA(x, y)}")
-        print(f"Online implementation robust: {unbiasedCKA(x, y)}")
-        print(f"Kornblith implementation: {cka(gram_linear(x), gram_linear(y))}")
-        print(
-            f"Kornblith implementation robust: {cka(gram_linear(x), gram_linear(y), debiased=True)}"
-        )
-        print(f"My shorcut implementation numba: {jasonCKA(x, y)}")
-        print(f"Online implementation simple: {good_cka(x, y)}")
+        print(f"CCA similarity: {do_pwcca(xCCA, yCCA)}")
