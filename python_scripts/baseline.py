@@ -461,7 +461,8 @@ def yield_big_transforms(
                 ds = ds + color
 
             # Make representations
-            rep2 = model.predict(ds, verbose=0)
+            with tf.device("/cpu:0"):
+                rep2 = model.predict(ds, verbose=0)
             if len(rep2.shape) == 4:
                 rep2 = np.mean(rep2, axis=(1, 2))
 
