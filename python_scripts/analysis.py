@@ -7,6 +7,8 @@ import glob
 import pandas as pd
 import numba as nb
 import itertools
+import re
+import json
 
 from tensorflow.python.ops.gen_array_ops import parallel_concat
 
@@ -41,7 +43,7 @@ def preprocess_peaRsaNumba(acts):
     return preprocess_rsaNumba(acts)
 
 
-@nb.jit(nopython=True, parallel=True)
+@nb.jit(nopython=True)
 def preprocess_speRsaNumba(acts):
     assert acts.ndim in (2, 4)
 
@@ -202,7 +204,7 @@ def get_threshold(acts):
     return ans
 
 
-@nb.jit(nopython=True, parallel=True)
+@nb.jit(nopython=True)
 def preprocess_ckaNumba(acts):
     if acts.ndim == 4:
         nImg = acts.shape[0]
@@ -261,13 +263,9 @@ def do_pwcca(acts1, acts2):
     try:
         # acts1.shape cannot be bigger than acts2.shape for pwcca
         if acts1.shape <= acts2.shape:
-            result = np.mean(
-                pwcca.compute_pwcca(acts1.T, acts2.T, epsilon=1e-10)[0]
-            )
+            result = np.mean(pwcca.compute_pwcca(acts1.T, acts2.T, epsilon=1e-10)[0])
         else:
-            result = np.mean(
-                pwcca.compute_pwcca(acts2.T, acts1.T, epsilon=1e-10)[0]
-            )
+            result = np.mean(pwcca.compute_pwcca(acts2.T, acts1.T, epsilon=1e-10)[0])
     except np.linalg.LinAlgError as e:
         result = np.nan
         print(f"svd in pwcca failed, saving nan.")
@@ -342,13 +340,9 @@ def correspondence_test(
     model2Reps = [np.load(rep) for rep in model2Glob]
 
     # Get all representation layer combos and their similarities
-    comboSims = list(
-        itertools.product(range(len(model1Reps)), range(len(model1Reps)))
-    )
+    comboSims = list(itertools.product(range(len(model1Reps)), range(len(model1Reps))))
     comboSims = np.array(comboSims)
-    comboSims = np.hstack(
-        (comboSims, np.zeros((len(comboSims), len(sim_fun))))
-    )
+    comboSims = np.hstack((comboSims, np.zeros((len(comboSims), len(sim_fun)))))
 
     print("Generating representation simliarities", flush=True)
     for combo in comboSims:
@@ -368,24 +362,31 @@ def correspondence_test(
     winners = np.zeros((len(model1Reps), len(names)), dtype="int")
     for layer in range(len(model1Reps)):
         print(f"Finding the winner for layer {layer}")
-        winners[layer, :] = np.argmax(
-            comboSims[comboSims[:, 0] == layer, 2:], axis=0
-        )
+        winners[layer, :] = np.argmax(comboSims[comboSims[:, 0] == layer, 2:], axis=0)
 
     winners
 
     return winners
 
 
-def make_allout_model(model):
+def make_allout_model(model, method="no_dropout"):
     """
     Creates a model with outputs at every layer that is not dropout.
     """
     inp = model.input
 
-    modelOuts = [
-        layer.output for layer in model.layers if "dropout" not in layer.name
-    ]
+    if method == "no_dropout":
+        modelOuts = [
+            layer.output for layer in model.layers if "dropout" not in layer.name
+        ]
+    elif method == "relu":
+        modelOuts = [
+            layer.output
+            for layer in model.layers
+            if hasattr(layer, "activation") and layer.activation.__name__ == "relu"
+        ]
+    else:
+        raise ValueError(f"Method {method} not recognized.")
 
     return Model(inputs=inp, outputs=modelOuts)
 
@@ -455,14 +456,28 @@ def get_trajectories(directory, file_str="*", file_name=None):
 
 def get_model_from_args(args, return_model=True, modelType="seed"):
     # Get model
-    if hasattr(args, "model_name") and args.model_name == "mobilenet":
-        model = tf.keras.applications.MobileNetV3Small(
-            input_shape=(224, 224, 3)
-        )
+    if hasattr(args, "model_name") and args.model_name == "vgg16":
+        model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
         model.compile(metrics=["top_k_categorical_accuracy"])
-        print(f"Model loaded: MobileNetV3Small", flush=True)
+        print(f"Model loaded: vgg16", flush=True)
         model.summary()
-        return model, "mobilenet", "."
+        return model, "vgg16", "."
+    elif hasattr(args, "model_name") and args.model_name == "vgg19":
+        model = tf.keras.applications.vgg19.VGG19(input_shape=(224, 224, 3))
+        model.compile(metrics=["top_k_categorical_accuracy"])
+        print(f"Model loaded: vgg19", flush=True)
+        model.summary()
+        return model, "vgg19", "."
+    elif hasattr(args, "model_name") and args.model_name == "resnet50":
+        model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
+        model.compile(metrics=["top_k_categorical_accuracy"])
+        print(f"Model loaded: resnet50", flush=True)
+        return model, "resnet50", "."
+    elif hasattr(args, "model_name") and args.model_name == "resnet101":
+        model = tf.keras.applications.resnet.ResNet101(input_shape=(224, 224, 3))
+        model.compile(metrics=["top_k_categorical_accuracy"])
+        print(f"Model loaded: resnet101", flush=True)
+        return model, "resnet101", "."
     elif hasattr(args, "model_dir"):
         # List models in model_dir
         modelList = glob.glob(os.path.join(args.model_dir, "*.pb"))
@@ -479,12 +494,8 @@ def get_model_from_args(args, return_model=True, modelType="seed"):
 
         # Load csv and get model parameters
         modelSeeds = pd.read_csv(args.model_seeds)
-        weightSeed = modelSeeds.loc[
-            modelSeeds["index"] == modelIdx, "weight"
-        ].item()
-        shuffleSeed = modelSeeds.loc[
-            modelSeeds["index"] == modelIdx, "shuffle"
-        ].item()
+        weightSeed = modelSeeds.loc[modelSeeds["index"] == modelIdx, "weight"].item()
+        shuffleSeed = modelSeeds.loc[modelSeeds["index"] == modelIdx, "shuffle"].item()
 
         # Load main model
         modelName = f"w{weightSeed}s{shuffleSeed}.pb"
@@ -568,6 +579,10 @@ def get_funcs(method="all"):
                 preprocFuns.append(preprocess_svcca)
                 simFuns.append(do_svcca)
                 analysisNames.append("cca")
+            elif string == "pwcca":
+                preprocFuns.append(preprocess_pwcca)
+                simFuns.append(do_pwcca)
+                analysisNames.append("pwcca")
             elif string == "cka":
                 preprocFuns.append(preprocess_ckaNumba)
                 simFuns.append(do_linearCKANumba2)
@@ -585,9 +600,7 @@ Large scale analysis functions
 """
 
 
-def multi_analysis(
-    rep1, rep2, preproc_fun, sim_fun, names=None, verbose=False
-):
+def multi_analysis(rep1, rep2, preproc_fun, sim_fun, names=None, verbose=False):
     """
     Perform similarity analysis between rep1 and rep2 once for each method as
     indicated by first applying a preproc_fun then the sim_fun. preproc_fun
@@ -649,18 +662,25 @@ def get_reps_from_all(modelDir, dataset, outputDir=None):
         print(f"Working on model: {model}")
         # Create allout model
         modelPath = os.path.join(modelDir, model)
-        outModel = make_allout_model(load_model(modelPath))
+
+        try:
+            outModel = make_allout_model(load_model(modelPath))
+        except OSError as e:
+            print(e)
+            print(f"Trying to load nested model")
+            modelPath = os.path.join(modelPath, model + ".pb")
+            outModel = make_allout_model(load_model(modelPath))
 
         # Check if representation folder exists, make if not
         if outputDir is None:
-            repDir = f"../outputs/masterOutput/representations/{model[0:-3]}"
+            repDir = f"../outputs/masterOutput/representations/{model.split('.')[0]}"
         else:
-            repDir = os.path.join(outputDir, model[0:-3])
+            repDir = os.path.join(outputDir, model.split(".")[0])
         if not os.path.exists(repDir):
             os.makedirs(repDir)
 
         # Check if already done
-        layerRepFiles = glob.glob(os.path.join(repDir, model[0:-3] + "l*"))
+        layerRepFiles = glob.glob(os.path.join(repDir, model.split(".")[0] + "l*"))
         if len(layerRepFiles) == len(outModel.outputs):
             print(
                 "Layer representation files already exists, skipping.",
@@ -672,7 +692,7 @@ def get_reps_from_all(modelDir, dataset, outputDir=None):
 
             # Save each rep with respective layer names
             for i, rep in enumerate(reps):
-                np.save(f"{repDir}/{model[0:-3]}l{i}.npy", rep)
+                np.save(f"{repDir}/{model.split('.')[0]}l{i}.npy", rep)
 
 
 def get_unstruct_model_sims(
@@ -691,6 +711,9 @@ def get_unstruct_model_sims(
     """
     # Get list of models
     models = glob.glob(os.path.join(repDir, "model*"))
+    # Only keep directories
+    models = [model for model in models if ".npy" not in model]
+
     # Strip model directories
     models = [model.split("/")[-1] for model in models]
 
@@ -733,9 +756,7 @@ def get_unstruct_model_sims(
     return sims
 
 
-def get_seed_model_sims(
-    modelSeeds, repDir, layer, preprocFun, simFun, noise=None
-):
+def get_seed_model_sims(modelSeeds, repDir, layer, preprocFun, simFun, noise=None):
     """
     Return similarity matrix across all models in repDir and from a specific
     layer index using preprocFun and simFun. Representations should be in their
@@ -770,9 +791,7 @@ def get_seed_model_sims(
             print(f"-Calculating similarity against index {j} model: {model2}")
 
             # Load representations of j and preprocess
-            rep2 = np.load(
-                os.path.join(repDir, model2, f"{model2}l{layer}.npy")
-            )
+            rep2 = np.load(os.path.join(repDir, model2, f"{model2}l{layer}.npy"))
             if noise is not None:
                 rep2 = rep2 + np.random.normal(
                     0, noise * np.std(rep2), size=rep2.shape
@@ -787,6 +806,88 @@ def get_seed_model_sims(
     return modelSims
 
 
+def find_matching_layers(model1Dir, model2Dir, preproc_fun, sim_fun):
+    """
+    Return a dictionary of corresponding layers between model1 and model2 based
+    on the representations in their directory. The representations are processed
+    using the preproc_fun and the sim_fun.
+    """
+    # Get and load representations
+    model1Paths = glob.glob(os.path.join(model1Dir, "*.npy"))
+    model2Paths = glob.glob(os.path.join(model2Dir, "*.npy"))
+    model1Reps = [np.load(rep) for rep in model1Paths]
+    model1Layers = [int(re.findall("[0-9]+(?=\.)", rep)[0]) for rep in model1Paths]
+    model2Reps = [np.load(rep) for rep in model2Paths]
+    model2Layers = [int(re.findall("[0-9]+(?=\.)", rep)[0]) for rep in model2Paths]
+
+    # Sort by layer
+    model1SortedIdx = np.argsort(model1Layers)
+    model2SortedIdx = np.argsort(model2Layers)
+    model1Reps = [model1Reps[i] for i in model1SortedIdx]
+    model2Reps = [model2Reps[i] for i in model2SortedIdx]
+    model1Layers = [model1Layers[i] for i in model1SortedIdx]
+    model2Layers = [model2Layers[i] for i in model2SortedIdx]
+
+    # Fix the similarity functions if they're a list
+    if isinstance(preproc_fun, list):
+        preproc_fun = preproc_fun[0]
+    if isinstance(sim_fun, list):
+        sim_fun = sim_fun[0]
+
+    # Preallocate array for similarity matrix
+    simMat = np.zeros(shape=(len(model1Reps), len(model2Reps)))
+    # Loop through and calculate similarities
+    for i, rep1 in enumerate(model1Reps):
+        rep1 = preproc_fun(rep1)
+        for j, rep2 in enumerate(model2Reps):
+            rep2 = preproc_fun(rep2)
+            simMat[i, j] = sim_fun(rep1, rep2)
+
+    # Create dictionary where the keys are the layers from model1
+    layerMatch = {layer: [] for layer in model1Layers}
+    for i, layer in enumerate(model2Layers):
+        # Find the model1 layer that is most similar
+        maxIdx = np.argmax(simMat[:, i])
+        layerMatch[model1Layers[maxIdx]].append(layer)
+
+    return layerMatch
+
+
+def get_matched_similarity(model1Dir, model2Dir, preprocFun, simFun, matchDict):
+    """
+    Return a dataframe for the similarity between each matched layer from
+    matchDict. The representations are loaded from model1Dir and model2Dir and
+    similarity is found using preprocFun and simFun.
+    """
+    df = pd.DataFrame(columns=["model1_layer", "model2_layer", "similarity"])
+
+    # Get model name from dir
+    model1Name = model1Dir.split("/")[-2]
+    model2Name = model2Dir.split("/")[-2]
+
+    for model1Layer, model2Layers in matchDict.items():
+        for model2Layer in model2Layers:
+            rep1 = np.load(os.path.join(model1Dir, f"{model1Name}l{model1Layer}.npy"))
+            rep2 = np.load(os.path.join(model2Dir, f"{model2Name}l{model2Layer}.npy"))
+            rep1 = preprocFun(rep1)
+            rep2 = preprocFun(rep2)
+            sim = simFun(rep1, rep2)
+            df = pd.concat(
+                (
+                    df,
+                    pd.DataFrame(
+                        {
+                            "model1_layer": [model1Layer],
+                            "model2_layer": [model2Layer],
+                            "similarity": [sim],
+                        }
+                    ),
+                )
+            )
+
+    return df
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -798,7 +899,20 @@ if __name__ == "__main__":
         "-a",
         type=str,
         help="type of analysis to run",
-        choices=["correspondence", "getReps", "seedSimMat", "itemSimMat"],
+        choices=[
+            "correspondence",
+            "getReps",
+            "seedSimMat",
+            "itemSimMat",
+            "layerMatch",
+            "matchedSimilarity",
+        ],
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        help="Model name to load",
+        choices=["vgg", "resnet", "vgg16", "vgg19", "resnet50", "resnet101"],
     )
     parser.add_argument(
         "--model_index",
@@ -809,9 +923,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--shuffle_seed", type=int, help="shuffle seed of the main model"
     )
-    parser.add_argument(
-        "--weight_seed", type=int, help="weight seed of the main model"
-    )
+    parser.add_argument("--weight_seed", type=int, help="weight seed of the main model")
     parser.add_argument(
         "--model_seeds",
         type=str,
@@ -838,6 +950,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--simSet",
+        "--sim_set",
         type=str,
         default="all",
         help="which set of similarity functions to use",
@@ -875,9 +988,7 @@ if __name__ == "__main__":
 
         # List model representations and make combinations
         reps = glob.glob(args.reps_dir + "/*")
-        reps = [
-            rep.split("/")[-1] for rep in reps if "w" in rep and "s" in rep
-        ]
+        reps = [rep.split("/")[-1] for rep in reps if "w" in rep and "s" in rep]
         repCombos = list(itertools.combinations(reps, 2))
         repCombos = [x for x in repCombos if x[0] == modelName]
 
@@ -885,14 +996,14 @@ if __name__ == "__main__":
         if args.output_dir is not None:
             fileName = f"{args.output_dir}/{modelName}Correspondence.csv"
         else:
-            fileName = f"../outputs/masterOutput/correspondence/{modelName}Correspondence.csv"
+            fileName = (
+                f"../outputs/masterOutput/correspondence/{modelName}Correspondence.csv"
+            )
         if os.path.exists(fileName):
             # Load existing dataframe
             winners = pd.read_csv(fileName, index_col=0)
         else:
-            numLayers = len(
-                glob.glob(f"{args.reps_dir}/{reps[0]}/{reps[0]}l*.npy")
-            )
+            numLayers = len(glob.glob(f"{args.reps_dir}/{reps[0]}/{reps[0]}l*.npy"))
             winners = pd.DataFrame(
                 sum([[combo] * numLayers for combo in repCombos], []),
                 columns=["model1", "model2"],
@@ -904,45 +1015,81 @@ if __name__ == "__main__":
             print(f"Comparing {model1} and {model2}", flush=True)
             if np.all(
                 winners.loc[
-                    (winners["model1"] == model1)
-                    & (winners["model2"] == model2),
+                    (winners["model1"] == model1) & (winners["model2"] == model2),
                     analysisNames,
                 ]
                 == -1
             ):
                 winners.loc[
-                    (winners["model1"] == model1)
-                    & (winners["model2"] == model2),
+                    (winners["model1"] == model1) & (winners["model2"] == model2),
                     analysisNames,
                 ] = correspondence_test(
                     model1, model2, preprocFuns, simFuns, names=analysisNames
                 )
 
                 print("Saving results", flush=True)
-                winners.to_csv(
-                    f"../outputs/masterOutput/correspondence/{modelName}Correspondence.csv"
-                )
+                winners.to_csv(fileName)
             else:
                 print("This pair is complete, skipping", flush=True)
 
     elif args.analysis == "getReps":
-        print("Getting representations each non-dropout layer", flush=True)
-
         # Load dataset
         print("Loading dataset", flush=True)
         dataset = np.load(args.dataset_file)
         print(f"dataset shape: {dataset.shape}", flush=True)
 
-        # Run it!
-        get_reps_from_all(args.models_dir, dataset, args.output_dir)
+        if args.model_name is not None:
+            # Get model
+            model, modelName, _ = get_model_from_args(args, return_model=True)
+
+            # Rescale dataset if needed
+            if args.model_name in ["vgg16", "vgg19", "resnet50", "resnet101"]:
+                dataset = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+
+            # Find all the layers with relu
+            modelInput = model.input
+            if args.layer_index is None:
+                print("Getting representations each non-dropout layer", flush=True)
+                modelOuts = [
+                    (i, layer.output)
+                    for i, layer in enumerate(model.layers)
+                    if hasattr(layer, "activation")
+                    and layer.activation.__name__ == "relu"
+                ]
+            else:
+                print("Getting representations for specified layers", flush=True)
+                args.layer_index = [int(x) for x in args.layer_index]
+                modelOuts = [(i, model.layers[i].output) for i in args.layer_index]
+
+            for i, layer in modelOuts:
+                outPath = os.path.join(args.reps_dir, f"{modelName}l{i}.npy")
+                if os.path.exists(outPath):
+                    print(f"Layer {i} already exists, skipping", flush=True)
+                    continue
+
+                # VGG is so big it has to be done on CPU but at least we have huge memory
+                device = "/CPU:0" if args.model_name in ["vgg16", "vgg19"] else "/GPU:1"
+                batchSize = 512 if args.model_name in ["vgg16", "vgg19"] else 32
+                with tf.device(device):
+                    tmpModel = Model(modelInput, layer)
+                    rep = tmpModel.predict(dataset, batch_size=batchSize)
+
+                if len(rep.shape) == 4:
+                    rep = np.mean(rep, axis=(1, 2))
+
+                # Save the representation
+                np.save(outPath, rep)
+
+        elif args.models_dir is not None:
+            # Run it!
+            get_reps_from_all(args.models_dir, dataset, args.output_dir)
+
     elif args.analysis == "seedSimMat":
         print("Creating model similarity matrix.", flush=True)
         preprocFuns, simFuns, simNames = get_funcs(args.simSet)
 
         for layer in args.layer_index:
-            for preprocFun, simFun, simName in zip(
-                preprocFuns, simFuns, simNames
-            ):
+            for preprocFun, simFun, simName in zip(preprocFuns, simFuns, simNames):
                 print(f"Working on layer {layer} with {simFun.__name__}")
                 simMat = get_seed_model_sims(
                     args.model_seeds,
@@ -962,9 +1109,7 @@ if __name__ == "__main__":
                     if not os.path.exists(args.output_dir):
                         os.makedirs(args.output_dir)
                     np.save(
-                        os.path.join(
-                            args.output_dir, f"simMat_l{layer}_{simName}.npy"
-                        ),
+                        os.path.join(args.output_dir, f"simMat_l{layer}_{simName}.npy"),
                         simMat,
                     )
     elif args.analysis == "itemSimMat":
@@ -984,243 +1129,80 @@ if __name__ == "__main__":
             args.output_dir,
             args.noise,
         )
-    else:
+    elif args.analysis == "layerMatch":
+        print("Performing layer matching analysis.", flush=True)
+        preprocFun, simFun, _ = get_funcs(args.simSet)
+        assert len(preprocFun) == 1
+        assert len(simFun) == 1
 
+        if args.model_name in ["vgg", "vgg16", "vgg19"]:
+            model1Dir = "../outputs/masterOutput/representations/vgg16/val"
+            model2Dir = "../outputs/masterOutput/representations/vgg19/val"
+        elif args.model_name in ["resnet", "resnet50", "resnet101"]:
+            model1Dir = "../outputs/masterOutput/representations/resnet50/val"
+            model2Dir = "../outputs/masterOutput/representations/resnet101/val"
+        else:
+            raise ValueError("Invalid model name")
+
+        matchDict = find_matching_layers(model1Dir, model2Dir, preprocFun, simFun)
+
+        with open(
+            f"../outputs/masterOutput/layerMatch{args.model_name}.json", "w"
+        ) as f:
+            json.dump(matchDict, f)
+    elif args.analysis == "matchedSimilarity":
+        print("Performing matched layer similarity analysis.", flush=True)
+        preprocFun, simFun, _ = get_funcs(args.simSet)
+        assert len(preprocFun) == 1
+        assert len(simFun) == 1
+
+        # Unlist functions
+        preprocFun = preprocFun[0]
+        simFun = simFun[0]
+
+        if args.model_name in ["vgg", "vgg16", "vgg19"]:
+            model1Dir = "../outputs/masterOutput/representations/vgg16/test"
+            model2Dir = "../outputs/masterOutput/representations/vgg19/test"
+            matchFile = "../outputs/masterOutput/layerMatchvgg.json"
+        elif args.model_name in ["resnet", "resnet50", "resnet101"]:
+            model1Dir = "../outputs/masterOutput/representations/resnet50/test"
+            model2Dir = "../outputs/masterOutput/representations/resnet101/test"
+            matchFile = "../outputs/masterOutput/layerMatchresnet.json"
+        else:
+            raise ValueError("Invalid model name")
+
+        with open(matchFile, "r") as f:
+            matchDict = json.load(f)
+
+        # The smaller model1 is the key
+        simDf = get_matched_similarity(
+            model1Dir, model2Dir, preprocFun, simFun, matchDict
+        )
+
+        # Save sim DF
+        simDf.to_csv(
+            f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
+        )
+    else:
         # x = np.load("../outputs/masterOutput/representations/w0s0/w0s0l0.npy")
         # y = np.load("../outputs/masterOutput/representations/w1s1/w1s1l0.npy")
         # x = preprocess_ckaNumba(x)
         # y = preprocess_ckaNumba(y)
 
-        x = np.random.rand(100, 100).astype("float32")
-        y = np.random.rand(100, 100).astype("float32")
+        x = np.random.rand(50, 1000).astype("float32")
+        y = np.random.rand(50, 1000).astype("float32")
 
-        def linKernel(x):
-            return x @ x.T
+        xCKA = preprocess_ckaNumba(x)
+        yCKA = preprocess_ckaNumba(y)
 
-        def dingCKA(A, B):
-            """
-            Computes Linear CKA distance bewteen representations A and B
-            FROM: https://github.com/js-d/sim_metric/blob/main/dists/scoring.py
-            """
-            similarity = np.linalg.norm(B @ A.T, ord="fro") ** 2
-            normalization = np.linalg.norm(
-                A @ A.T, ord="fro"
-            ) * np.linalg.norm(B @ B.T, ord="fro")
+        print(f"CKA similarity: {do_linearCKANumba2(xCKA, yCKA)}")
 
-            return 1 - similarity / normalization
+        xRSA = preprocess_eucRsaNumba(x)
+        yRSA = preprocess_eucRsaNumba(y)
 
-        def jasonCKA(acts1, acts2):
-            """
-            Pre: acts must be shape (datapoints, neurons)
-            """
-            acts1 = acts1.copy()
-            acts2 = acts2.copy()
+        print(f"RSA similarity: {do_rsaNumba(xRSA, yRSA)}")
 
-            # Center X and Y
-            acts1 -= acts1.mean(axis=0)
-            acts2 -= acts2.mean(axis=0)
+        xCCA = preprocess_pwcca(x)
+        yCCA = preprocess_pwcca(y)
 
-            def _frobNorm(x):
-                return np.sum(np.absolute(x) ** 2) ** (1 / 2)
-
-            sim = _frobNorm(acts1.T @ acts2) ** 2
-            normalization = _frobNorm(acts1.T @ acts1) * _frobNorm(
-                acts2.T @ acts2
-            )
-            return sim / normalization
-
-        @nb.jit()
-        def oldCKA(acts1, acts2):
-            """
-            Pre: acts must be shape (datapoints, neurons)
-            """
-            n = acts1.shape[0]
-            centerMatrix = np.eye(n) - (np.ones((n, n)) / n)
-            centerMatrix = centerMatrix.astype(nb.float32)
-
-            # Top part
-            centeredX = np.dot(np.dot(acts1, acts1.T), centerMatrix)
-            centeredY = np.dot(np.dot(acts2, acts2.T), centerMatrix)
-            top = np.trace(np.dot(centeredX, centeredY)) / ((n - 1) ** 2)
-
-            # Bottom part
-            botLeft = np.trace(np.dot(centeredX, centeredX)) / ((n - 1) ** 2)
-            botRight = np.trace(np.dot(centeredY, centeredY)) / ((n - 1) ** 2)
-            bot = (botLeft * botRight) ** (1 / 2)
-
-            return top / bot
-
-        def centering(K):
-            n = K.shape[0]
-            unit = np.ones([n, n])
-            I = np.eye(n)
-            H = I - unit / n
-
-            return np.dot(
-                np.dot(H, K), H
-            )  # HKH are the same with KH, KH is the first centering, H(KH) do the second time, results are the sme with one time centering
-            # return np.dot(H, K)  # KH
-
-        def linear_HSIC(X, Y):
-            L_X = np.dot(X, X.T)
-            L_Y = np.dot(Y, Y.T)
-            return np.sum(centering(L_X) * centering(L_Y))
-
-        def linear_CKA(X, Y):
-            """ FROM: https://github.com/yuanli2333/CKA-Centered-Kernel-Alignment"""
-            hsic = linear_HSIC(X, Y)
-            var1 = np.sqrt(linear_HSIC(X, X))
-            var2 = np.sqrt(linear_HSIC(Y, Y))
-
-            return hsic / (var1 * var2)
-
-        def unbiased_HSIC(K, L):
-            """Computes an unbiased estimator of HISC. This is equation (2) from the paper
-            From: https://towardsdatascience.com/do-different-neural-networks-learn-the-same-things-ac215f2103c3
-            """
-
-            # create the unit **vector** filled with ones
-            n = K.shape[0]
-            ones = np.ones(shape=(n))
-
-            # fill the diagonal entries with zeros
-            np.fill_diagonal(K, val=0)  # this is now K_tilde
-            np.fill_diagonal(L, val=0)  # this is now L_tilde
-
-            # first part in the square brackets
-            trace = np.trace(np.dot(K, L))
-
-            # middle part in the square brackets
-            nominator1 = np.dot(np.dot(ones.T, K), ones)
-            nominator2 = np.dot(np.dot(ones.T, L), ones)
-            denominator = (n - 1) * (n - 2)
-            middle = np.dot(nominator1, nominator2) / denominator
-
-            # third part in the square brackets
-            multiplier1 = 2 / (n - 2)
-            multiplier2 = np.dot(np.dot(ones.T, K), np.dot(L, ones))
-            last = multiplier1 * multiplier2
-
-            # complete equation
-            unbiased_hsic = 1 / (n * (n - 3)) * (trace + middle - last)
-
-            return unbiased_hsic
-
-        def unbiasedCKA(X, Y):
-            """Computes the CKA of two matrices. This is equation (1) from the paper"""
-
-            nominator = unbiased_HSIC(np.dot(X, X.T), np.dot(Y, Y.T))
-            denominator1 = unbiased_HSIC(np.dot(X, X.T), np.dot(X, X.T))
-            denominator2 = unbiased_HSIC(np.dot(Y, Y.T), np.dot(Y, Y.T))
-
-            cka = nominator / np.sqrt(denominator1 * denominator2)
-
-            return cka
-
-        def good_cka(X, Y):
-            # From https://goodresearch.dev/cka.html
-            # Implements linear CKA as in Kornblith et al. (2019)
-            X = X.copy()
-            Y = Y.copy()
-
-            # Center X and Y
-            X -= X.mean(axis=0)
-            Y -= Y.mean(axis=0)
-
-            # Calculate CKA
-            XTX = X.T.dot(X)
-            YTY = Y.T.dot(Y)
-            YTX = Y.T.dot(X)
-
-            return (YTX ** 2).sum() / np.sqrt(
-                (XTX ** 2).sum() * (YTY ** 2).sum()
-            )
-
-        def gram_linear(x):
-            """Compute Gram (kernel) matrix for a linear kernel.
-
-            Args:
-                x: A num_examples x num_features matrix of features.
-
-            Returns:
-                A num_examples x num_examples Gram matrix of examples.
-            """
-            return x.dot(x.T)
-
-        def center_gram(gram, unbiased=False):
-            """Center a symmetric Gram matrix.
-
-            This is equvialent to centering the (possibly infinite-dimensional) features
-            induced by the kernel before computing the Gram matrix.
-
-            Args:
-                gram: A num_examples x num_examples symmetric matrix.
-                unbiased: Whether to adjust the Gram matrix in order to compute an unbiased
-                estimate of HSIC. Note that this estimator may be negative.
-
-            Returns:
-                A symmetric matrix with centered columns and rows.
-            """
-            if not np.allclose(gram, gram.T):
-                raise ValueError("Input must be a symmetric matrix.")
-            gram = gram.copy()
-
-            if unbiased:
-                # This formulation of the U-statistic, from Szekely, G. J., & Rizzo, M.
-                # L. (2014). Partial distance correlation with methods for dissimilarities.
-                # The Annals of Statistics, 42(6), 2382-2412, seems to be more numerically
-                # stable than the alternative from Song et al. (2007).
-                n = gram.shape[0]
-                np.fill_diagonal(gram, 0)
-                means = np.sum(gram, 0, dtype=np.float64) / (n - 2)
-                means -= np.sum(means) / (2 * (n - 1))
-                gram -= means[:, None]
-                gram -= means[None, :]
-                np.fill_diagonal(gram, 0)
-            else:
-                means = np.mean(gram, 0, dtype=np.float64)
-                means -= np.mean(means) / 2
-                gram -= means[:, None]
-                gram -= means[None, :]
-
-            return gram
-
-        def cka(gram_x, gram_y, debiased=False):
-            """Compute CKA.
-
-            Args:
-                gram_x: A num_examples x num_examples Gram matrix.
-                gram_y: A num_examples x num_examples Gram matrix.
-                debiased: Use unbiased estimator of HSIC. CKA may still be biased.
-
-            from https://colab.research.google.com/github/google-research/google-research/blob/master/representation_similarity/Demo.ipynb
-
-            Returns:
-                The value of CKA between X and Y.
-            """
-            gram_x = center_gram(gram_x, unbiased=debiased)
-            gram_y = center_gram(gram_y, unbiased=debiased)
-
-            # Note: To obtain HSIC, this should be divided by (n-1)**2 (biased variant) or
-            # n*(n-3) (unbiased variant), but this cancels for CKA.
-            scaled_hsic = gram_x.ravel().dot(gram_y.ravel())
-
-            normalization_x = np.linalg.norm(gram_x)
-            normalization_y = np.linalg.norm(gram_y)
-            return scaled_hsic / (normalization_x * normalization_y)
-
-        print(f"Ding: {-1 * (dingCKA(x.T, y.T) - 1)}")
-        print(
-            f"My old implementation with kernel: {oldCKA(linKernel(x), linKernel(y))}"
-        )
-        print(f"My old implementation w/o kernel: {oldCKA(x, y)}")
-        print(f"Online implementation: {linear_CKA(x, y)}")
-        print(f"Online implementation robust: {unbiasedCKA(x, y)}")
-        print(
-            f"Kornblith implementation: {cka(gram_linear(x), gram_linear(y))}"
-        )
-        print(
-            f"Kornblith implementation robust: {cka(gram_linear(x), gram_linear(y), debiased=True)}"
-        )
-        print(f"My shorcut implementation numba: {jasonCKA(x, y)}")
-        print(f"Online implementation simple: {good_cka(x, y)}")
+        print(f"CCA similarity: {do_pwcca(xCCA, yCCA)}")

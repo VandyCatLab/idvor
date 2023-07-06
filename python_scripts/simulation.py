@@ -16,7 +16,6 @@ def permuteTest(
     outputIdx=-2,
     nPermutes=1000,
 ):
-
     # Subset dataset
     if nImgs is not None:
         dataset = dataset[:nImgs]
@@ -91,9 +90,7 @@ def permuteTest(
             repCut = np.copy(rep)
             nFeatures = rep.shape[1]
             toCut = int(np.round(nFeatures * 0.1))
-            repCut[
-                :, np.random.choice(nFeatures, size=toCut, replace=False)
-            ] = 0
+            repCut[:, np.random.choice(nFeatures, size=toCut, replace=False)] = 0
 
             sims = analysis.multi_analysis(
                 rep, repCut, preprocFuns, simFuns, names=analysisNames
@@ -226,8 +223,8 @@ def bigSizeRatioTest():
 
 
 def parametricAblation(
-    minNeuron=3,
-    maxNeuron=10,
+    model,
+    imgset,
     nImgs=None,
     outputPath=None,
     preprocFuns=None,
@@ -236,13 +233,6 @@ def parametricAblation(
     outputIdx=-2,
     nPermutes=1000,
 ):
-    modelPath = "../outputs/masterOutput/models/w0s0.pb"
-    print("Loading model")
-    model = tf.keras.models.load_model(modelPath)
-
-    # load dataset
-    imgset = np.load("../outputs/masterOutput/dataset.npy")
-
     # Subset dataset
     if nImgs is not None:
         imgset = imgset[:nImgs]
@@ -258,8 +248,11 @@ def parametricAblation(
     rep_orig = tmpModel.predict(imgset)
     repShape = rep_orig.shape
     rep_flat = rep_orig.flatten()
-    repMean = np.mean(rep_flat)
-    repSD = np.std(rep_flat)
+
+    # Calculate # of neurons to keep
+    neuronsKept = np.int32(np.arange(0.3, 1.1, 0.1) * repShape[1])
+    # Reverse order
+    neuronsKept = neuronsKept[::-1]
 
     colNames = analysisNames + ["Neurons"]
 
@@ -273,10 +266,8 @@ def parametricAblation(
         if permute % 100 == 0:
             print(f"-- Permutation at {permute}")
 
-        df = pd.DataFrame(
-            columns=colNames, index=range(minNeuron, maxNeuron + 1)
-        )
-        for nNeurons in range(minNeuron, maxNeuron + 1):
+        df = pd.DataFrame(columns=colNames, index=neuronsKept)
+        for nNeurons in neuronsKept:
             rep = np.random.choice(rep_flat, size=repShape, replace=False)
             repCut = np.copy(rep)
             repCut = repCut[
@@ -292,6 +283,8 @@ def parametricAblation(
 
 
 def parametricNoise(
+    model,
+    imgset,
     minNoise=0.0,
     maxNoise=1,
     step=0.1,
@@ -304,13 +297,6 @@ def parametricNoise(
     analysisNames=None,
     outputIdx=-2,
 ):
-    modelPath = "../outputs/masterOutput/models/w0s0.pb"
-    print("Loading model")
-    model = tf.keras.models.load_model(modelPath)
-
-    # load dataset
-    imgset = np.load("../outputs/masterOutput/dataset.npy")
-
     # Only use a subset of the images
     if nImgs is not None:
         imgset = imgset[:nImgs]
@@ -337,7 +323,7 @@ def parametricNoise(
     colNames = analysisNames + ["Noise"]
 
     permuteData = pd.DataFrame(columns=colNames)
-    noiseRange = np.arange(minNoise, maxNoise + 0.1, step)
+    noiseRange = np.arange(minNoise, maxNoise + step, step)
 
     # Set seed if available
     if seed is not None:
@@ -358,9 +344,7 @@ def parametricNoise(
 
         df = pd.DataFrame(columns=colNames, index=noiseRange)
         for noise in noiseRange:
-            repNoise = rep + np.random.normal(
-                scale=repSD * noise, size=repShape
-            )
+            repNoise = rep + np.random.normal(scale=repSD * noise, size=repShape)
             repNoise = repNoise.astype(np.float32)
 
             sims = analysis.multi_analysis(
@@ -368,7 +352,7 @@ def parametricNoise(
                 repNoise,
                 preprocFuns,
                 simFuns,
-                verbose=False,
+                verbose=True,
                 names=analysisNames,
             )
             df.loc[noise] = list(sims.values()) + [noise]
@@ -428,7 +412,7 @@ def sanity_check(
         )
         permuteData.loc[permute] = list(sims.values())
 
-    permuteData.to_csv(outPath)
+        permuteData.to_csv(outPath)
 
 
 if __name__ == "__main__":
@@ -458,7 +442,7 @@ if __name__ == "__main__":
         "-m",
         type=str,
         help="model to use for representations",
-        choices=["allcnnc", "mobilenet"],
+        choices=["allcnnc", "vgg", "resnet"],
         default="allcnnc",
     )
     parser.add_argument(
@@ -504,9 +488,28 @@ if __name__ == "__main__":
     preprocFuns, simFuns, analysisNames = analysis.get_funcs(args.simSet)
 
     if args.analysis == "noise":
+        if args.dataset == "cifar10":
+            dataset = np.load("../outputs/masterOutput/dataset.npy")
+            step = 0.01
+        elif args.dataset == "imagenet":
+            dataset = np.load("../outputs/masterOutput/bigDataset.npy")
+            step = 0.5
+
+        if args.model == "allcnnc":
+            modelPath = "../outputs/masterOutput/models/w0s0.pb"
+            model = tf.keras.models.load_model(modelPath)
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+
         parametricNoise(
+            model,
+            dataset,
             maxNoise=4.0,
-            step=0.01,
+            step=step,
             permutations=args.permutes,
             seed=args.seed,
             nImgs=args.nImgs,
@@ -525,10 +528,11 @@ if __name__ == "__main__":
         if args.model == "allcnnc":
             modelPath = "../outputs/masterOutput/models/w0s0.pb"
             model = tf.keras.models.load_model(modelPath)
-        elif args.model == "mobilenet":
-            model = tf.keras.applications.MobileNetV3Small(
-                input_shape=(224, 224, 3)
-            )
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
             model.compile(metrics=["top_k_categorical_accuracy"])
 
         permuteTest(
@@ -551,10 +555,11 @@ if __name__ == "__main__":
         if args.model == "allcnnc":
             modelPath = "../outputs/masterOutput/models/w0s0.pb"
             model = tf.keras.models.load_model(modelPath)
-        elif args.model == "mobilenet":
-            model = tf.keras.applications.MobileNetV3Small(
-                input_shape=(224, 224, 3)
-            )
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
             model.compile(metrics=["top_k_categorical_accuracy"])
 
         sanity_check(
@@ -569,7 +574,26 @@ if __name__ == "__main__":
             nPermutes=args.permutes,
         )
     elif args.analysis == "ablate":
+        if args.dataset == "cifar10":
+            dataset = "../outputs/masterOutput/dataset.npy"
+        elif args.dataset == "imagenet":
+            dataset = "../outputs/masterOutput/bigDataset.npy"
+
+        if args.model == "allcnnc":
+            modelPath = "../outputs/masterOutput/models/w0s0.pb"
+            model = tf.keras.models.load_model(modelPath)
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+
+        dataset = np.load(dataset)
+
         parametricAblation(
+            model=model,
+            imgset=dataset,
             nImgs=args.nImgs,
             outputPath=args.outputPath,
             preprocFuns=preprocFuns,
@@ -584,7 +608,18 @@ if __name__ == "__main__":
         elif args.dataset == "imagenet":
             dataset = "../outputs/masterOutput/bigDataset.npy"
 
+        if args.model == "allcnnc":
+            modelPath = "../outputs/masterOutput/models/w0s0.pb"
+            model = tf.keras.models.load_model(modelPath)
+        elif args.model == "vgg":
+            model = tf.keras.applications.vgg16.VGG16(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+        elif args.model == "resnet":
+            model = tf.keras.applications.resnet50.ResNet50(input_shape=(224, 224, 3))
+            model.compile(metrics=["top_k_categorical_accuracy"])
+
         sizeRatioTest(
+            model=model,
             nImgs=args.nImgs,
             outputPath=args.outputPath,
             imgset=dataset,

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jstat@latest/dist/jstat.min.js"></script>
+</head>
+
+<body>
+    <script>
+        const outerPadding = 20;
+        const innerPadding = 5;
+
+        const layerViewHeight = 20;
+        const plotHeight = 300;
+        const plotWidth = 700;
+
+        const badLayerHeight = 10;
+        const badLayerWidth = 0.5;
+        const goodLayerHeight = 20;
+        const goodLayerWidth = 3;
+
+        const layerColor = 'rgb(43, 123, 186)';
+        const indSimColor = 'rgb(200, 200, 200)';
+
+        const totalHeight = outerPadding * 2 + layerViewHeight * 2 + plotHeight;
+        const totalWidth = outerPadding * 2 + plotWidth;
+
+        let svg = d3.select("body")
+            .append("svg")
+            .attr("width", totalWidth)
+            .attr("height", totalHeight);
+
+        const simPlot = d3.csv('../outputs/masterOutput/similarities/matchedSim-resnet.csv').then(
+            (d) => {
+                let data = d.map(d => {
+                    return {
+                        model1Layer: +d.model1_layer,
+                        model2Layer: +d.model2_layer,
+                        similarity: +d.similarity,
+                    }
+                })
+
+                // Calculate model layer max
+                const model1LayerMax = d3.max(data.map(d => d.model1Layer))
+                const model2LayerMax = d3.max(data.map(d => d.model2Layer))
+                // Get valid layers 
+                const model1Layers = data.map(d => +d.model1Layer)
+                let model2Layers = data.map(d => +d.model2Layer)
+
+                // Only keep unique valid layers in model2
+                model2Layers = [...new Set(model2Layers)]
+
+                // Calculate mean similarity for each layer from model1
+                let meanSims = data.map(d => {
+                    return {
+                        layer: d.model1Layer,
+                        meanSim: d3.mean(data.filter(e => e.model1Layer == d.model1Layer).map(e => e.similarity))
+                    }
+                })
+                // Filter out layers that are repeated
+                meanSims = meanSims.filter((v, i, a) => a.findIndex(t => (t.layer === v.layer)) === i)
+
+                // Build plot axes
+                let xBottomAxis = d3.scaleLinear()
+                    .domain([0, model1LayerMax + 1])
+                    .range([0, plotWidth - innerPadding])
+                let xTopAxis = d3.scaleLinear()
+                    .domain([0, model2LayerMax + 1])
+                    .range([0, plotWidth - innerPadding])
+
+                let yAxis = d3.scaleLinear()
+                    .domain([.3, 1.05])
+                    .range([plotHeight, 0])
+
+                let plotGroup = svg.append('g')
+                    .attr('transform', 'translate(' + outerPadding + ', ' + outerPadding + ')')
+
+                // Create model1 plot group
+                model1Group = plotGroup.append('g')
+                    .attr('transform', 'translate(' + outerPadding + ', '
+                        + (layerViewHeight + plotHeight - (goodLayerHeight / 10)) + ')')
+
+                // Add layers for the bad layers
+                model1Group.append('g')
+                    .selectAll('empty')
+                    .data(d3.range(1, model1LayerMax + 2))
+                    .enter()
+                    .append('rect')
+                    .attr('x', (d, i) => xBottomAxis(i + 1))
+                    .attr('y', layerViewHeight / 2 - badLayerHeight / 2)
+                    .attr('width', badLayerWidth)
+                    .attr('height', badLayerHeight)
+                    .attr('visibility', (d) => model1Layers.includes(d) ? 'hidden' : 'visible')
+
+                // Add layers for the good layers
+                model1Group.append('g')
+                    .selectAll('empty')
+                    .data(d3.range(1, model1LayerMax + 2))
+                    .enter()
+                    .append('rect')
+                    .attr('x', (d, i) => xBottomAxis(i + 1) - goodLayerWidth / 2)
+                    .attr('y', layerViewHeight / 2 - goodLayerHeight / 2)
+                    .attr('width', goodLayerWidth)
+                    .attr('height', goodLayerHeight)
+                    .attr('fill', layerColor)
+                    .attr('visibility', (d) => model1Layers.includes(d) ? 'visible' : 'hidden')
+
+                // Create model2 plot group
+                model2Group = plotGroup.append('g')
+                    .attr('transform', 'translate(' + outerPadding + ', '
+                        + (goodLayerHeight / 8) + ')')
+
+                // Add layers for the bad layers
+                model2Group.append('g')
+                    .selectAll('empty')
+                    .data(d3.range(1, model2LayerMax + 2))
+                    .enter()
+                    .append('rect')
+                    .attr('x', (d, i) => xTopAxis(i + 1))
+                    .attr('y', layerViewHeight / 2 - badLayerHeight / 2)
+                    .attr('width', badLayerWidth)
+                    .attr('height', badLayerHeight)
+                    .attr('visibility', (d) => model2Layers.includes(d) ? 'hidden' : 'visible')
+
+                // Add layers for the good layers
+                model2Group.append('g')
+                    .selectAll('empty')
+                    .data(d3.range(1, model2LayerMax + 2))
+                    .enter()
+                    .append('rect')
+                    .attr('x', (d, i) => xTopAxis(i + 1) - goodLayerWidth / 2)
+                    .attr('y', layerViewHeight / 2 - goodLayerHeight / 2)
+                    .attr('width', goodLayerWidth)
+                    .attr('height', goodLayerHeight)
+                    .attr('fill', layerColor)
+                    .attr('visibility', (d) => model2Layers.includes(d) ? 'visible' : 'hidden')
+
+                // Create similarity plot group
+                simGroup = plotGroup.append('g')
+                    .attr('transform', 'translate(' + outerPadding + ', ' + (layerViewHeight) + ')')
+
+                // Draw line from each dot to corresponding layer in model2
+                simGroup.append('g')
+                    .selectAll('empty')
+                    .data(data)
+                    .enter()
+                    .append('line')
+                    .attr('x1', (d) => xBottomAxis(d.model1Layer))
+                    .attr('y1', (d) => yAxis(d.similarity))
+                    .attr('x2', (d) => xTopAxis(d.model2Layer))
+                    .attr('y2', (d) => yAxis(d.similarity))
+                    .attr('stroke', indSimColor)
+                    .attr('stroke-width', 1)
+
+                // Draw vertical line from end of line to corresponding layer in model2
+                simGroup.append('g')
+                    .selectAll('empty')
+                    .data(data)
+                    .enter()
+                    .append('line')
+                    .attr('x1', (d) => xTopAxis(d.model2Layer))
+                    .attr('y1', (d) => yAxis(d.similarity))
+                    .attr('x2', (d) => xTopAxis(d.model2Layer))
+                    .attr('y2', (d) => layerViewHeight / 2 - goodLayerHeight / 2)
+                    .attr('stroke', indSimColor)
+                    .attr('stroke-width', 1)
+
+                // Add dots for each similarity entry
+                simGroup.append('g')
+                    .selectAll('empty')
+                    .data(data)
+                    .enter()
+                    .append('circle')
+                    .attr('cx', (d) => xBottomAxis(d.model1Layer))
+                    .attr('cy', (d) => yAxis(d.similarity))
+                    .attr('r', 2)
+                    .attr('fill', indSimColor)
+
+                // Draw a line between each mean similarity dot
+                simGroup.append('g')
+                    .selectAll('empty')
+                    .data(meanSims)
+                    .enter()
+                    .append('line')
+                    .attr('x1', (d, i) => xBottomAxis(d.layer))
+                    .attr('y1', (d) => yAxis(d.meanSim))
+                    .attr('x2', (d, i) => i < meanSims.length - 1 ? xBottomAxis(meanSims[i + 1].layer) : xBottomAxis(d.layer))
+                    .attr('y2', (d, i) => i < meanSims.length - 1 ? yAxis(meanSims[i + 1].meanSim) : yAxis(d.meanSim))
+                    .attr('stroke', layerColor)
+                    .attr('stroke-width', 3)
+
+                // Add dots for mean similarity entry
+                simGroup.append('g')
+                    .selectAll('empty')
+                    .data(meanSims)
+                    .enter()
+                    .append('circle')
+                    .attr('cx', (d) => xBottomAxis(d.layer))
+                    .attr('cy', (d) => yAxis(d.meanSim))
+                    .attr('r', 4)
+                    .attr('fill', layerColor)
+
+                simGroup.append('g')
+                    .attr('transform', 'translate(0, ' + (plotHeight) + ')')
+                    .call(d3.axisBottom(xBottomAxis))
+                    .attr('class', 'layerAxes')
+                    .selectAll('text')
+                    .attr('dy', layerViewHeight + innerPadding)
+                simGroup.append('g')
+                    .attr('transform', 'translate(0, ' + '0' + ')')
+                    .call(d3.axisTop(xTopAxis))
+                    .attr('class', 'layerAxes')
+                    .selectAll('text')
+                    .attr('dy', -layerViewHeight)
+                simGroup.append('g')
+                    .attr('transform', 'translate(' + '0' + ',0)')
+                    .call(d3.axisLeft(yAxis))
+
+                simGroup.selectAll('.layerAxes')
+                    .selectAll('line')
+                    .attr('visibility', 'hidden')
+
+
+            }
+        )
+
+    </script>
+
+</body>
+
+</html>
