@@ -906,6 +906,7 @@ if __name__ == "__main__":
             "itemSimMat",
             "layerMatch",
             "matchedSimilarity",
+            "bigModelSims",
         ],
     )
     parser.add_argument(
@@ -1183,6 +1184,19 @@ if __name__ == "__main__":
         simDf.to_csv(
             f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
         )
+    elif args.analysis == "bigModelSims":
+        # Imagenet directory
+        datasetDir = '/data/ImageNet/sortedVal'
+        # List categories
+        cats = os.listdir(datasetDir)
+
+        nRepeats = 50
+
+        for i in range(nRepeats):
+            print(f"Working on repeat {i+1} of {nRepeats}")
+            # Create dataset
+
+
     else:
         # x = np.load("../outputs/masterOutput/representations/w0s0/w0s0l0.npy")
         # y = np.load("../outputs/masterOutput/representations/w1s1/w1s1l0.npy")
