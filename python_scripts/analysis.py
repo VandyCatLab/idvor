@@ -1194,6 +1194,17 @@ if __name__ == "__main__":
             f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
         )
     elif args.analysis == "bigModelSims":
+        layerNames = {
+            "vgg16": ["block1_pool", "fc1", "fc2"],
+            "vgg19": ["block1_pool", "fc1", "fc2"],
+            "resnet50": ["pool1_pool", "conv5_block1_out", "avg_pool"],
+            "resnet101": [
+                "pool1_pool",
+                "conv4_block19_out",
+                "avg_pool",
+            ],
+        }
+        midType = "param"
         preprocFun, simFun, simNames = get_funcs(args.simSet)
         preprocFun = preprocFun[0]
         simFun = simFun[0]
@@ -1244,9 +1255,10 @@ if __name__ == "__main__":
             # Get representations from important layers of VGG16
             model = tf.keras.applications.VGG16(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.layers[2].output),
-                tf.keras.layers.GlobalAveragePooling2D()(model.layers[17].output),
-                model.layers[21].output,
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["vgg16"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
             tmpReps = model.predict(images)
@@ -1261,13 +1273,10 @@ if __name__ == "__main__":
             # Get representations from important layers of VGG19
             model = tf.keras.applications.VGG19(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("block1_conv2").output
-                ),
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("block5_conv4").output
-                ),
-                model.get_layer("fc2").output,
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["vgg19"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
             tmpReps = model.predict(images)
@@ -1281,15 +1290,10 @@ if __name__ == "__main__":
             # Get representations from important layers of ResNet50
             model = tf.keras.applications.ResNet50(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("conv1_relu").output
-                ),
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("conv4_block6_out").output
-                ),
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("conv5_block3_out").output
-                ),
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["resnet50"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
             tmpReps = model.predict(images)
@@ -1303,15 +1307,10 @@ if __name__ == "__main__":
             # Get representations from important layers of ResNet101
             model = tf.keras.applications.ResNet101(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("conv1_relu").output
-                ),
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("conv4_block23_out").output
-                ),
-                tf.keras.layers.GlobalAveragePooling2D()(
-                    model.get_layer("conv5_block3_out").output
-                ),
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["resnet101"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
             tmpReps = model.predict(images)
@@ -1334,7 +1333,7 @@ if __name__ == "__main__":
 
         # Save
         np.save(
-            f"../outputs/masterOutput/similarities/bigModelSims_{simNames}.npy",
+            f"../outputs/masterOutput/similarities/bigModelSims_{simNames}_{midType}.npy",
             simMats,
         )
 
