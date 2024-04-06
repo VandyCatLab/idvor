@@ -974,7 +974,16 @@ if __name__ == "__main__":
         default=None,
         help="if set, add this proportion of noise to the representations based on their standard deviation",
     )
+    parser.add_argument(
+        "--gpu_idx",
+        type=int,
+        default=None,
+        help="which gpu to use, if None, use default",
+    )
     args = parser.parse_args()
+
+    if args.gpu_idx is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_idx)
 
     np.random.seed(2022)
     # Now do analysis
@@ -1185,17 +1194,148 @@ if __name__ == "__main__":
             f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
         )
     elif args.analysis == "bigModelSims":
+        layerNames = {
+            "vgg16": ["block1_pool", "fc1", "fc2"],
+            "vgg19": ["block1_pool", "fc1", "fc2"],
+            "resnet50": ["pool1_pool", "conv5_block1_out", "avg_pool"],
+            "resnet101": [
+                "pool1_pool",
+                "conv4_block19_out",
+                "avg_pool",
+            ],
+        }
+        midType = "param"
+        preprocFun, simFun, simNames = get_funcs(args.simSet)
+        preprocFun = preprocFun[0]
+        simFun = simFun[0]
+        simNames = simNames[0]
+
         # Imagenet directory
-        datasetDir = '/data/ImageNet/sortedVal'
+        datasetDir = "/data/ImageNet/sortedVal"
         # List categories
         cats = os.listdir(datasetDir)
 
         nRepeats = 50
 
+        # Preprocess similarity matrices (repeats, layer, model, model)
+        simMats = np.zeros(shape=(nRepeats, 3, 4, 4), dtype="float32")
+
         for i in range(nRepeats):
             print(f"Working on repeat {i+1} of {nRepeats}")
-            # Create dataset
 
+            # Preallocate image array
+            images = np.zeros(shape=(len(cats), 224, 224, 3), dtype="float32")
+            # Randomly select one image from each category
+            for j, cat in enumerate(cats):
+                # List images
+                catImages = os.listdir(os.path.join(datasetDir, cat))
+
+                # Randomly select one
+                image = np.random.choice(catImages)
+
+                # Load image
+                image = tf.keras.utils.load_img(
+                    os.path.join(datasetDir, cat, image),
+                    target_size=(224, 224),
+                    keep_aspect_ratio=True,
+                )
+
+                # Preprocess image (function is same for all big models)
+                image = tf.keras.applications.vgg16.preprocess_input(
+                    np.expand_dims(image, axis=0)
+                )
+
+                # Save image
+                images[j] = image
+
+            # Preallocate matrix for preprocessed representations
+            preprocReps = np.zeros(
+                shape=(4, 4, len(images), len(images)), dtype="float32"
+            )
+            # Get representations from important layers of VGG16
+            model = tf.keras.applications.VGG16(include_top=True)
+            modelOutputs = [
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["vgg16"]
+            ]
+            model = Model(inputs=model.input, outputs=modelOutputs)
+            tmpReps = model.predict(images)
+
+            for k, rep in enumerate(tmpReps):
+                preprocReps[0, k, :, :] = preprocFun(rep)
+
+            # Clear GPU memory
+            del model
+            tf.keras.backend.clear_session()
+
+            # Get representations from important layers of VGG19
+            model = tf.keras.applications.VGG19(include_top=True)
+            modelOutputs = [
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["vgg19"]
+            ]
+            model = Model(inputs=model.input, outputs=modelOutputs)
+            tmpReps = model.predict(images)
+
+            for k, rep in enumerate(tmpReps):
+                preprocReps[1, k, :, :] = preprocFun(rep)
+
+            # Clear GPU memory
+            del model
+
+            # Get representations from important layers of ResNet50
+            model = tf.keras.applications.ResNet50(include_top=True)
+            modelOutputs = [
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["resnet50"]
+            ]
+            model = Model(inputs=model.input, outputs=modelOutputs)
+            tmpReps = model.predict(images)
+
+            for k, rep in enumerate(tmpReps):
+                preprocReps[2, k, :, :] = preprocFun(rep)
+
+            # Clear GPU memory
+            del model
+
+            # Get representations from important layers of ResNet101
+            model = tf.keras.applications.ResNet101(include_top=True)
+            modelOutputs = [
+                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
+                if len(model.get_layer(layer).output.shape) > 2
+                else model.get_layer(layer).output
+                for layer in layerNames["resnet101"]
+            ]
+            model = Model(inputs=model.input, outputs=modelOutputs)
+            tmpReps = model.predict(images)
+
+            for k, rep in enumerate(tmpReps):
+                preprocReps[3, k, :, :] = preprocFun(rep)
+
+            # Clear GPU memory
+            del model
+
+            # Calculate model similarity matrices
+            for layer in range(3):
+                for model1, model2 in itertools.combinations(range(4), 2):
+                    sims = simFun(
+                        preprocReps[model1, layer, :, :],
+                        preprocReps[model2, layer, :, :],
+                    )
+                    simMats[i, layer, model1, model2] = sims
+                    simMats[i, layer, model2, model1] = sims
+
+        # Save
+        np.save(
+            f"../outputs/masterOutput/similarities/bigModelSims_{simNames}_{midType}.npy",
+            simMats,
+        )
 
     else:
         # x = np.load("../outputs/masterOutput/representations/w0s0/w0s0l0.npy")
