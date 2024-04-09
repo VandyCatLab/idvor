@@ -150,8 +150,8 @@ def make_vNet(
         data_format=data_format,
     )(inputs)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l1")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l1")(x)
+    x = layers.ReLU(name="relu_l1")(x)
 
     # Layer 2 - V2
     x = layers.Conv2D(
@@ -163,11 +163,13 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l2")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l2")(x)
+    x = layers.ReLU(name="relu_l2")(x)
 
     # Layer 3 - V3
-    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
+    x = layers.MaxPool2D(
+        pool_size=(2, 2), padding="same", data_format=data_format, name="pool_l3"
+    )(x)
     x = layers.Conv2D(
         256,
         (5, 5),
@@ -177,11 +179,13 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l3")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l3")(x)
+    x = layers.ReLU(name="relu_l3")(x)
 
     # Layer 4 - hV4
-    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
+    x = layers.MaxPool2D(
+        pool_size=(2, 2), padding="same", data_format=data_format, name="pool_l4"
+    )(x)
     x = layers.Conv2D(
         256,
         (5, 5),
@@ -191,8 +195,8 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l4")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l4")(x)
+    x = layers.ReLU(name="relu_l4")(x)
 
     # Layer 5 - LO
     x = layers.Conv2D(
@@ -204,8 +208,8 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l5")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l5")(x)
+    x = layers.ReLU(name="relu_l5")(x)
 
     # Layer 6 - TO
     x = layers.Conv2D(
@@ -217,11 +221,13 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l6")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l6")(x)
+    x = layers.ReLU(name="relu_l6")(x)
 
     # Layer 7 - pFUS
-    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
+    x = layers.MaxPool2D(
+        pool_size=(2, 2), padding="same", data_format=data_format, name="pool_l7"
+    )(x)
     x = layers.Conv2D(
         1024,
         (3, 3),
@@ -231,11 +237,13 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l7")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l7")(x)
+    x = layers.ReLU(name="relu_l7")(x)
 
     # Layer 8 - mFUS
-    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
+    x = layers.MaxPool2D(
+        pool_size=(2, 2), padding="same", data_format=data_format, name="pool_l8"
+    )(x)
     x = layers.Conv2D(
         1024,
         (3, 3),
@@ -245,11 +253,13 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l8")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l8")(x)
+    x = layers.ReLU(name="relu_l8")(x)
 
     # Layer 9
-    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
+    x = layers.MaxPool2D(
+        pool_size=(2, 2), padding="same", data_format=data_format, name="pool_l9"
+    )(x)
     x = layers.Conv2D(
         2048,
         (1, 1),
@@ -259,11 +269,13 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l9")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l9")(x)
+    x = layers.ReLU(name="relu_l9")(x)
 
     # Layer 10
-    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
+    x = layers.MaxPool2D(
+        pool_size=(2, 2), padding="same", data_format=data_format, name="pool_l10"
+    )(x)
     x = layers.Conv2D(
         2048,
         (1, 1),
@@ -273,16 +285,18 @@ def make_vNet(
         data_format=data_format,
     )(x)
     x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l10")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.ReLU()(x)
+    x = layers.Dropout(0.2, name="dropout_l10")(x)
+    x = layers.ReLU(name="relu_l10")(x)
 
     # Readout
-    x = layers.GlobalAveragePooling2D(data_format=data_format)(x)
-    x = layers.Flatten(data_format=data_format)(x)
+    x = layers.GlobalAveragePooling2D(data_format=data_format, name="global_avg_pool")(
+        x
+    )
+    x = layers.Flatten(data_format=data_format, name="flatten")(x)
     x = layers.Dense(output_shape, name="readout")(x)
 
     if softmax:
-        x = layers.Softmax()(x)
+        x = layers.Softmax(name="softmax")(x)
 
     model = tf.keras.Model(inputs, x)
 
