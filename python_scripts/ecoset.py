@@ -413,13 +413,23 @@ def preprocess_vNet(image):
 
 
 if __name__ == "__main__":
-    imgPath = "images/allBirds/test/n01604330_17035.JPEG"
+    # Only use first GPU
+    gpus = tf.config.experimental.list_physical_devices("GPU")
+    if gpus:
+        try:
+            tf.config.experimental.set_visible_devices(gpus[0], "GPU")
+            logical_gpus = tf.config.experimental.list_logical_devices("GPU")
+            print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPU")
+        except RuntimeError as e:
+            print(e)
+
+    imgPath = "../testBird.JPEG"
 
     vNet = make_vNet(
-        weights_path="./models/vNET/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch79",
+        weights_path="../models/vNET/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch79",
         softmax=True,
-        input_shape=(3, 128, 128),
-        data_format="channels_first",
+        input_shape=(128, 128, 3),
+        data_format="channels_last",
     )
 
     def _parse_image(x, image_size=(224, 224), data_format="channels_last"):
@@ -449,7 +459,7 @@ if __name__ == "__main__":
     img = _parse_image(
         imgPath,
         image_size=(128, 128),
-        data_format="channels_first",
+        data_format="channels_last",
     )
 
     # Predict
@@ -460,7 +470,7 @@ if __name__ == "__main__":
 
     del vNet
     alexNet = make_alex_net_v2(
-        weights_path="./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89",
+        weights_path="../models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89",
         softmax=True,
     )
 
@@ -476,3 +486,10 @@ if __name__ == "__main__":
 
     # Top 5
     alexNetPreds = tf.nn.top_k(alexNetPreds, k=5)
+
+    # Print results
+    print("vNet predictions:")
+    print(vNetPreds)
+    print()
+    print("AlexNet predictions:")
+    print(alexNetPreds)
