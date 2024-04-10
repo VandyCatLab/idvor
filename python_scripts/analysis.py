@@ -940,6 +940,7 @@ if __name__ == "__main__":
             "seedSimMat",
             "itemSimMat",
             "layerMatch",
+            "ecosetSims",
             "matchedSimilarity",
             "bigModelSims",
         ],
@@ -1269,6 +1270,53 @@ if __name__ == "__main__":
         simDf.to_csv(
             f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
         )
+    elif args.analysis == "ecosetSims":
+        preprocFuns, simFuns, simNames = get_funcs(args.simSet)
+
+        # Find reps based on model_name
+        repDirs = glob.glob(os.path.join(args.reps_dir, f"{args.model_name}*"))
+        repDirs.sort()
+
+        # Loop through layers
+        for layerIdx in range(len(glob.glob(f"{repDirs[0]}/*"))):
+            for preprocFun, simFun, simName in zip(preprocFuns, simFuns, simNames):
+                print(f"Working on layer {layerIdx} with {simFun.__name__}")
+                # Get the layer for each model
+                reps = []
+                for repDir in repDirs:
+                    layers = glob.glob(os.path.join(repDir, "*.npy"))
+                    layers.sort()
+                    rep = np.load(layers[layerIdx])
+                    rep = np.expand_dims(rep, axis=0)
+
+                    reps += [rep]
+
+                reps = np.concatenate(reps, axis=0)
+
+                # Preallocate a similarity matrix
+                simMat = np.zeros(shape=(len(repDirs), len(repDirs)))
+                for i in range(len(repDirs)):
+                    for j in range(i, len(repDirs)):
+                        print(f"Comparing {repDirs[i]} and {repDirs[j]}", flush=True)
+                        simMat[i, j] = simFun(preprocFun(reps[i]), preprocFun(reps[j]))
+                        simMat[j, i] = simMat[i, j]
+
+                if args.output_dir is None:
+                    np.save(
+                        f"../outputs/masterOutput/similarities/{args.model_name}_simMat_l{layerIdx}_{simName}.npy",
+                        simMat,
+                    )
+                else:
+                    if not os.path.exists(args.output_dir):
+                        os.makedirs(args.output_dir)
+                    np.save(
+                        os.path.join(
+                            args.output_dir,
+                            f"{args.model_name}simMat_l{layerIdx}_{simName}.npy",
+                        ),
+                        simMat,
+                    )
+
     elif args.analysis == "bigModelSims":
         layerNames = {
             "vgg16": ["block1_pool", "fc1", "fc2"],
