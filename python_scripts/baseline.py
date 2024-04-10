@@ -334,7 +334,10 @@ def yield_big_transforms(
     """Unlike previous function, this one acts on preprocessed images array."""
     origShape = dataset.shape
     with tf.device("/cpu:0"):
-        ds = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+        inputShape = model.layers[0].output_shape[0][1:3][0]
+        ds = tf.keras.preprocessing.image.smart_resize(
+            dataset, (inputShape, inputShape)
+        )
         ds = preproc_fun(ds)
 
     # Set model to output reps at selected layer
@@ -441,7 +444,7 @@ def yield_big_transforms(
                 ds = tf.image.resize(dataset, (size, size))
 
                 # Random crop, note that this will crop everything together
-                ds = tf.image.random_crop(ds, (numImgs, 224, 224, 3))
+                ds = tf.image.random_crop(ds, (numImgs, inputShape, inputShape, 3))
 
                 # Maybe flip images
                 if np.random.rand() > 0.5:
@@ -452,9 +455,9 @@ def yield_big_transforms(
                 color = np.matmul(eigVecs, alphas * eigVals)
                 color = np.concatenate(
                     [
-                        np.tile(color[0], (224, 224, 1)),
-                        np.tile(color[1], (224, 224, 1)),
-                        np.tile(color[2], (224, 224, 1)),
+                        np.tile(color[0], (inputShape, inputShape, 1)),
+                        np.tile(color[1], (inputShape, inputShape, 1)),
+                        np.tile(color[2], (inputShape, inputShape, 1)),
                     ],
                     axis=2,
                 )
@@ -585,6 +588,12 @@ if __name__ == "__main__":
         "--shuffle_seed", type=int, help="shuffle seed of the main model"
     )
     parser.add_argument("--weight_seed", type=int, help="weight seed of the main model")
+    parser.add_argument(
+        "--model_seed",
+        type=int,
+        default=-1,
+        help="model seed to select the model from the ecoset models",
+    )
     parser.add_argument(
         "--model_seeds",
         type=str,
@@ -823,6 +832,26 @@ if __name__ == "__main__":
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 256, "scaleHigh": 480},
+                    )
+                elif "AlexNet" in modelName:
+                    transforms = yield_big_transforms(
+                        "random",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options={"scaleLow": 224, "scaleHigh": 256},
+                    )
+                elif "vNet" in modelName:
+                    transforms = yield_big_transforms(
+                        "random",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options={"scaleLow": 180, "scaleHigh": 224},
                     )
                 else:
                     transforms = yield_transforms(

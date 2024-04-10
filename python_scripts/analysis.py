@@ -9,6 +9,7 @@ import numba as nb
 import itertools
 import re
 import json
+import ecoset
 
 from tensorflow.python.ops.gen_array_ops import parallel_concat
 
@@ -478,6 +479,40 @@ def get_model_from_args(args, return_model=True, modelType="seed"):
         model.compile(metrics=["top_k_categorical_accuracy"])
         print(f"Model loaded: resnet101", flush=True)
         return model, "resnet101", "."
+    elif hasattr(args, "model_name") and args.model_name == "AlexNet":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for AlexNet.")
+        else:
+            weightPath = f"../models/AlexNet/ILSVRC_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch89"
+        # Load AlexNet
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath, output_shape=1000, softmax=False
+        )
+
+        print(f"Model loaded: AlexNet", flush=True)
+        return model, f"AlexNet{seed:02d}", "."
+    elif hasattr(args, "model_name") and args.model_name == "vNet":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for vNet.")
+        else:
+            weightPath = f"../models/vNET/ILSVRC_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch79"
+        # Load vNet
+        model = ecoset.make_vNet(
+            weights_path=weightPath,
+            softmax=False,
+            input_shape=(128, 128, 3),
+            output_shape=1000,
+            data_format="channels_last",
+        )
+
+        print(f"Model loaded: vNet", flush=True)
+        return model, f"vNet{seed:02d}", "."
     elif hasattr(args, "model_dir"):
         # List models in model_dir
         modelList = glob.glob(os.path.join(args.model_dir, "*.pb"))
@@ -520,14 +555,14 @@ def get_funcs(method="all"):
             preprocess_peaRsaNumba,
             preprocess_eucRsaNumba,
             preprocess_speRsaNumba,
-            preprocess_svcca,
+            preprocess_pwcca,
             preprocess_ckaNumba,
         ]
         simFuns = [
             do_rsaNumba,
             do_rsaNumba,
             do_rsaNumba,
-            do_svcca,
+            do_pwcca,
             do_linearCKANumba2,
         ]
         analysisNames = ["peaRsa", "eucRsa", "speRsa", "cca", "cka"]
@@ -913,7 +948,16 @@ if __name__ == "__main__":
         "--model_name",
         type=str,
         help="Model name to load",
-        choices=["vgg", "resnet", "vgg16", "vgg19", "resnet50", "resnet101"],
+        choices=[
+            "vgg",
+            "resnet",
+            "vgg16",
+            "vgg19",
+            "resnet50",
+            "resnet101",
+            "vNet",
+            "AlexNet",
+        ],
     )
     parser.add_argument(
         "--model_index",
@@ -925,6 +969,9 @@ if __name__ == "__main__":
         "--shuffle_seed", type=int, help="shuffle seed of the main model"
     )
     parser.add_argument("--weight_seed", type=int, help="weight seed of the main model")
+    parser.add_argument(
+        "--model_seed", type=int, default=-1, help="seed for the ecoset models"
+    )
     parser.add_argument(
         "--model_seeds",
         type=str,
@@ -992,15 +1039,25 @@ if __name__ == "__main__":
 
         preprocFuns, simFuns, analysisNames = get_funcs(args.simSet)
 
-        # Get model
-        _, modelName, _ = get_model_from_args(args, return_model=False)
-        modelName = modelName.split(".")[0]
+        if args.model_name in ["vNet", "AlexNet"]:
+            modelName = args.model_name
 
-        # List model representations and make combinations
-        reps = glob.glob(args.reps_dir + "/*")
-        reps = [rep.split("/")[-1] for rep in reps if "w" in rep and "s" in rep]
-        repCombos = list(itertools.combinations(reps, 2))
-        repCombos = [x for x in repCombos if x[0] == modelName]
+            # Filter for the specific models
+            reps = glob.glob(os.path.join(args.reps_dir, f"{modelName}*"))
+            reps = [rep.split("/")[-1] for rep in reps]
+
+            repCombos = list(itertools.combinations(reps, 2))
+        else:
+            # Get model
+            _, modelName, _ = get_model_from_args(args, return_model=False)
+            modelName = modelName.split(".")[0]
+
+            # List model representations and make combinations
+            reps = glob.glob(args.reps_dir + "/*")
+            reps = [rep.split("/")[-1] for rep in reps if "w" in rep and "s" in rep]
+
+            repCombos = list(itertools.combinations(reps, 2))
+            repCombos = [x for x in repCombos if x[0] == modelName]
 
         # Prepare dataframes
         if args.output_dir is not None:
@@ -1053,8 +1110,16 @@ if __name__ == "__main__":
             model, modelName, _ = get_model_from_args(args, return_model=True)
 
             # Rescale dataset if needed
-            if args.model_name in ["vgg16", "vgg19", "resnet50", "resnet101"]:
+            if args.model_name in [
+                "vgg16",
+                "vgg19",
+                "resnet50",
+                "resnet101",
+                "AlexNet",
+            ]:
                 dataset = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+            elif args.model_name == "vNet":
+                dataset = tf.keras.preprocessing.image.smart_resize(dataset, (128, 128))
 
             # Find all the layers with relu
             modelInput = model.input
@@ -1063,13 +1128,20 @@ if __name__ == "__main__":
                 modelOuts = [
                     (i, layer.output)
                     for i, layer in enumerate(model.layers)
-                    if hasattr(layer, "activation")
-                    and layer.activation.__name__ == "relu"
+                    if (
+                        hasattr(layer, "activation")
+                        and layer.activation.__name__ == "relu"
+                    )
+                    or isinstance(layer, tf.keras.layers.ReLU)
                 ]
             else:
                 print("Getting representations for specified layers", flush=True)
                 args.layer_index = [int(x) for x in args.layer_index]
                 modelOuts = [(i, model.layers[i].output) for i in args.layer_index]
+
+            # Check if the reps_dir exists
+            if not os.path.exists(args.reps_dir):
+                os.makedirs(args.reps_dir)
 
             for i, layer in modelOuts:
                 outPath = os.path.join(args.reps_dir, f"{modelName}l{i}.npy")
@@ -1078,8 +1150,12 @@ if __name__ == "__main__":
                     continue
 
                 # VGG is so big it has to be done on CPU but at least we have huge memory
-                device = "/CPU:0" if args.model_name in ["vgg16", "vgg19"] else "/GPU:1"
-                batchSize = 512 if args.model_name in ["vgg16", "vgg19"] else 32
+                device = (
+                    "/CPU:0"
+                    if args.model_name in ["vgg16", "vgg19", "vNet"]
+                    else "/GPU:1"
+                )
+                batchSize = 512 if args.model_name in ["vgg16", "vgg19", "vNet"] else 32
                 with tf.device(device):
                     tmpModel = Model(modelInput, layer)
                     rep = tmpModel.predict(dataset, batch_size=batchSize)
@@ -1255,9 +1331,13 @@ if __name__ == "__main__":
             # Get representations from important layers of VGG16
             model = tf.keras.applications.VGG16(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["vgg16"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
@@ -1273,9 +1353,13 @@ if __name__ == "__main__":
             # Get representations from important layers of VGG19
             model = tf.keras.applications.VGG19(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["vgg19"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
@@ -1290,9 +1374,13 @@ if __name__ == "__main__":
             # Get representations from important layers of ResNet50
             model = tf.keras.applications.ResNet50(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["resnet50"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
@@ -1307,9 +1395,13 @@ if __name__ == "__main__":
             # Get representations from important layers of ResNet101
             model = tf.keras.applications.ResNet101(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["resnet101"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
