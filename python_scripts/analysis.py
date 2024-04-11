@@ -494,6 +494,22 @@ def get_model_from_args(args, return_model=True, modelType="seed"):
 
         print(f"Model loaded: AlexNet", flush=True)
         return model, f"AlexNet{seed:02d}", "."
+    elif hasattr(args, "model_name") and args.model_name == "AlexNetEcoset":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for AlexNet.")
+        else:
+            weightPath = f"../models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch89"
+
+        # Load AlexNet
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath, output_shape=565, softmax=False
+        )
+
+        print(f"Model loaded: AlexNet (ecoset)", flush=True)
+        return model, f"AlexNetEcoset{seed:02d}", "."
     elif hasattr(args, "model_name") and args.model_name == "vNet":
         # Find the seed from args
         seed = args.model_seed
@@ -513,6 +529,25 @@ def get_model_from_args(args, return_model=True, modelType="seed"):
 
         print(f"Model loaded: vNet", flush=True)
         return model, f"vNet{seed:02d}", "."
+    elif hasattr(args, "model_name") and args.model_name == "vNetEcoset":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for vNet.")
+        else:
+            weightPath = f"../models/vNET/ecoset_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch79"
+        # Load vNet
+        model = ecoset.make_vNet(
+            weights_path=weightPath,
+            softmax=False,
+            input_shape=(128, 128, 3),
+            output_shape=565,
+            data_format="channels_last",
+        )
+
+        print(f"Model loaded: vNet (ecoset)", flush=True)
+        return model, f"vNetEcoset{seed:02d}", "."
     elif hasattr(args, "model_dir"):
         # List models in model_dir
         modelList = glob.glob(os.path.join(args.model_dir, "*.pb"))
@@ -940,7 +975,8 @@ if __name__ == "__main__":
             "seedSimMat",
             "itemSimMat",
             "layerMatch",
-            "ecosetSims",
+            "ecosetModelSims",
+            "ecosetDataSims",
             "matchedSimilarity",
             "bigModelSims",
         ],
@@ -957,7 +993,9 @@ if __name__ == "__main__":
             "resnet50",
             "resnet101",
             "vNet",
+            "vNetEcoset",
             "AlexNet",
+            "AlexNetEcoset",
         ],
     )
     parser.add_argument(
@@ -1117,9 +1155,10 @@ if __name__ == "__main__":
                 "resnet50",
                 "resnet101",
                 "AlexNet",
+                "AlexNetEcoset",
             ]:
                 dataset = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
-            elif args.model_name == "vNet":
+            elif args.model_name in ["vNet", "vNetEcoset"]:
                 dataset = tf.keras.preprocessing.image.smart_resize(dataset, (128, 128))
 
             # Find all the layers with relu
@@ -1153,10 +1192,14 @@ if __name__ == "__main__":
                 # VGG is so big it has to be done on CPU but at least we have huge memory
                 device = (
                     "/CPU:0"
-                    if args.model_name in ["vgg16", "vgg19", "vNet"]
+                    if args.model_name in ["vgg16", "vgg19", "vNet", "vNetEcoset"]
                     else "/GPU:1"
                 )
-                batchSize = 512 if args.model_name in ["vgg16", "vgg19", "vNet"] else 32
+                batchSize = (
+                    512
+                    if args.model_name in ["vgg16", "vgg19", "vNet", "vNetEcoset"]
+                    else 32
+                )
                 with tf.device(device):
                     tmpModel = Model(modelInput, layer)
                     rep = tmpModel.predict(dataset, batch_size=batchSize)
@@ -1270,7 +1313,87 @@ if __name__ == "__main__":
         simDf.to_csv(
             f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
         )
-    elif args.analysis == "ecosetSims":
+    elif args.analysis == "ecosetDataSims":
+        preprocessFuns, simFuns, simNames = get_funcs(args.simSet)
+
+        # Find reps based on model_name
+        repDirs = glob.glob(os.path.join(args.reps_dir, f"{args.model_name}*"))
+
+        # Split repDirs based on if they have ecoset in the name
+        ecosetRepDirs = [rep for rep in repDirs if "Ecoset" in rep]
+        nonEcosetRepDirs = [rep for rep in repDirs if "Ecoset" not in rep]
+
+        # Make combos of ecoset and non-ecoset
+        repCombos = list(itertools.product(ecosetRepDirs, nonEcosetRepDirs))
+
+        # Get layers
+        layers = [
+            int(layer.split("l")[-1].split(".npy")[0])
+            for layer in glob.glob(f"{repDirs[0]}/*")
+        ]
+        layers.sort()
+        # Create dataframe to hold data
+        simDf = pd.DataFrame()
+
+        # Loop through layers
+        for layerIdx in range(len(glob.glob(f"{repDirs[0]}/*"))):
+            # Loop through combos
+            for ecosetRepDir, nonEcosetRepDir in repCombos:
+                print(
+                    f"Working on layer {layers[layerIdx]} between {ecosetRepDir} and {nonEcosetRepDir}"
+                )
+
+                # Load ecosetReps
+                ecosetReps = glob.glob(
+                    os.path.join(ecosetRepDir, f"{args.model_name}*.npy")
+                )
+                ecosetReps.sort()
+                ecosetReps = np.load(ecosetReps[layerIdx])
+
+                # Load non ecoset reps
+                nonEcosetReps = glob.glob(
+                    os.path.join(nonEcosetRepDir, f"{args.model_name}*.npy")
+                )
+                nonEcosetReps.sort()
+                nonEcosetReps = np.load(nonEcosetReps[layerIdx])
+
+                # Get similarities
+                simDict = multi_analysis(
+                    ecosetReps,
+                    nonEcosetReps,
+                    preprocessFuns,
+                    simFuns,
+                    names=simNames,
+                    verbose=True,
+                )
+
+                # Save data to dataframe
+                simDf = pd.concat(
+                    (
+                        simDf,
+                        pd.DataFrame(
+                            {
+                                "ecoset": [ecosetRepDir.split("/")[-1]],
+                                "nonEcoset": [nonEcosetRepDir.split("/")[-1]],
+                                "layer": [layers[layerIdx]],
+                                **simDict,
+                            }
+                        ),
+                    )
+                )
+
+        # Save dataframe
+        if args.output_dir is None:
+            simDf.to_csv(
+                f"../outputs/masterOutput/similarities/{args.model_name}_ecosetDataSims.csv"
+            )
+        else:
+            if not os.path.exists(args.output_dir):
+                os.makedirs(args.output_dir)
+            simDf.to_csv(
+                os.path.join(args.output_dir, f"{args.model_name}_ecosetDataSims.csv")
+            )
+    elif args.analysis == "ecosetModelSims":
         preprocFuns, simFuns, simNames = get_funcs(args.simSet)
 
         # Find reps based on model_name
