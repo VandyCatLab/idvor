@@ -867,6 +867,12 @@ if __name__ == "__main__":
                     print(f"{outPath} already exists, skipping.", flush=True)
         elif args.analysis == "random":
             for layer in args.layer_index:
+                try:
+                    layer = int(layer)
+                except ValueError:
+                    # Look for the layer string in the model
+                    layer = [i for i, name in enumerate(model.layers) if name == layer]
+                    layer = layer[0]
                 print(f"Working on layer {layer}.", flush=True)
                 # Get transforms generators
                 if modelName in ["vgg", "vgg16", "vgg19"]:
@@ -874,7 +880,7 @@ if __name__ == "__main__":
                         "random",
                         model,
                         lambda x: x,
-                        int(layer),
+                        layer,
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 256, "scaleHigh": 512},
@@ -884,7 +890,7 @@ if __name__ == "__main__":
                         "random",
                         model,
                         lambda x: x,
-                        int(layer),
+                        layer,
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 256, "scaleHigh": 480},
@@ -894,7 +900,7 @@ if __name__ == "__main__":
                         "random",
                         model,
                         lambda x: x,
-                        int(layer),
+                        layer,
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 224, "scaleHigh": 256},
@@ -904,7 +910,7 @@ if __name__ == "__main__":
                         "random",
                         model,
                         lambda x: x,
-                        int(layer),
+                        layer,
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 128, "scaleHigh": 146},
@@ -913,7 +919,7 @@ if __name__ == "__main__":
                     transforms = yield_transforms(
                         args.analysis,
                         model,
-                        int(layer),
+                        layer,
                         dataset,
                         return_aug=False,
                         versions=args.versions,
