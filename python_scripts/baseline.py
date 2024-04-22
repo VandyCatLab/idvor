@@ -334,7 +334,7 @@ def yield_big_transforms(
 ):
     """Unlike previous function, this one acts on preprocessed images array."""
     origShape = dataset.shape
-    with tf.device("/cpu:0"):
+    with tf.device("/gpu"):
         inputShape = model.layers[0].output_shape[0][1:3][0]
         ds = tf.keras.preprocessing.image.smart_resize(
             dataset, (inputShape, inputShape)
@@ -348,8 +348,8 @@ def yield_big_transforms(
     model = Model(inputs=inp, outputs=out)
 
     # Get reps for originals
-    with tf.device("/cpu:0"):
-        rep1 = model.predict(ds, verbose=0)
+    with tf.device("/cpu"):
+        rep1 = model(ds, training=False)
 
     if len(rep1.shape) == 4:
         rep1 = np.mean(rep1, axis=(1, 2))
@@ -440,7 +440,8 @@ def yield_big_transforms(
         numImgs = ds.shape[0]
         for v in range(versions):
             # Random scale
-            with tf.device("/cpu:0"):
+            with tf.device("/cpu"):
+                print("Creating dataset")
                 size = np.random.randint(options["scaleLow"], options["scaleHigh"] + 1)
                 ds = tf.image.resize(dataset, (size, size))
 
@@ -465,8 +466,15 @@ def yield_big_transforms(
                 ds = ds + color
 
             # Make representations
-            with tf.device("/cpu:0"):
-                rep2 = model.predict(ds, verbose=0)
+            print("Getting reps")
+            # Manual batch
+            reps = []
+            for i in range(0, ds.shape[0], 32):
+                with tf.device("/gpu"):
+                    reps += [model(ds[i : i + 32], training=False)]
+            with tf.device("/cpu"):
+                rep2 = tf.concat(reps, axis=0)
+
             if len(rep2.shape) == 4:
                 rep2 = np.mean(rep2, axis=(1, 2))
 
@@ -897,7 +905,7 @@ if __name__ == "__main__":
                         int(layer),
                         dataset,
                         versions=args.versions,
-                        options={"scaleLow": 224, "scaleHigh": 256},
+                        options={"scaleLow": 256, "scaleHigh": 256},
                     )
                 elif "vNet" in modelName:
                     transforms = yield_big_transforms(
@@ -907,7 +915,7 @@ if __name__ == "__main__":
                         int(layer),
                         dataset,
                         versions=args.versions,
-                        options={"scaleLow": 128, "scaleHigh": 146},
+                        options={"scaleLow": 140, "scaleHigh": 224},
                     )
                 else:
                     transforms = yield_transforms(
