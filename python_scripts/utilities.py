@@ -1,5 +1,4 @@
 import glob
-from operator import index
 import pandas as pd
 import os
 import itertools
@@ -7,6 +6,9 @@ import numpy as np
 import scipy.stats as stats
 import json
 import glob
+import tensorflow as tf
+import gc
+import time
 
 
 def compile_correspondence(path, models_path):
@@ -390,15 +392,52 @@ def compile_training_traj(trajDir, pattern):
     return df
 
 
+def manual_gpu_batch(model, images, batch_size=32):
+    # Start timer
+    start = time.time()
+
+    # Manual batch
+    reps = []
+    for i in range(0, images.shape[0], batch_size):
+        with tf.device("/gpu"):
+            reps += [model(images[i : i + batch_size], training=False)]
+
+    with tf.device("/cpu"):
+        # Check if it is multi output
+        if isinstance(reps[0], list):
+            # Check how many outputs
+            nOuts = len(reps[0])
+            tmp = [0] * nOuts
+            for i in range(nOuts):
+                tmp[i] = tf.concat([rep[i] for rep in reps], axis=0)
+            reps = tmp
+        else:
+            reps = tf.concat(reps, axis=0)
+
+    # End timer
+    end = time.time()
+
+    print(f"Batch finished in {end - start} seconds")
+    return reps
+
+
+def clear_model():
+    # Check if model variable exists
+    if "model" in globals():
+        del globals()["model"]
+        gc.collect()
+        tf.keras.backend.clear_session()
+
+
 if __name__ == "__main__":
     # List globs that match
-    modelName = "vgg16"
-    files = glob.glob(f"../outputs/masterOutput/baseline/{modelName}l*-random.csv")
+    modelName = "AlexNet"
+    files = glob.glob(f"../outputs/masterOutput/baseline/{modelName}*-random.csv")
     df = pd.DataFrame()
     for file in files:
         tmp = pd.read_csv(file, index_col=0)
         # Figure out what layer from file name
-        layer = int(file.split("/")[-1].split("l")[1].split("-")[0])
+        layer = int(file.split(modelName)[-1].split("l")[0])
         # Add layer column
         tmp["layer"] = layer
         df = pd.concat((df, tmp))
