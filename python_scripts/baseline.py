@@ -877,11 +877,15 @@ if __name__ == "__main__":
             for layer in args.layer_index:
                 try:
                     layer = int(layer)
+                    print(f"Working on layer {layer}.", flush=True)
                 except ValueError:
                     # Look for the layer string in the model
-                    layer = [i for i, name in enumerate(model.layers) if name == layer]
+                    layer = [
+                        i for i, name in enumerate(model.layers) if name.name == layer
+                    ]
                     layer = layer[0]
-                print(f"Working on layer {layer}.", flush=True)
+                    print(f"Working on layer {model.layers[layer].name}.", flush=True)
+
                 # Get transforms generators
                 if modelName in ["vgg", "vgg16", "vgg19"]:
                     transforms = yield_big_transforms(
@@ -911,7 +915,7 @@ if __name__ == "__main__":
                         layer,
                         dataset,
                         versions=args.versions,
-                        options={"scaleLow": 256, "scaleHigh": 256},
+                        options={"scaleLow": 256, "scaleHigh": 480},
                     )
                 elif "vNet" in modelName:
                     transforms = yield_big_transforms(
