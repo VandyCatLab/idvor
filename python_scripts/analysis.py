@@ -1442,7 +1442,7 @@ if __name__ == "__main__":
 
     elif args.analysis == "ecosetCrossSims":
         alexNetLayers = ["pool1", "conv4", "fc6", "pool5", "fc7"]
-        vNetLayers = ["relu_l1", "pool_l7", "relu_l8", "relu_l9"]
+        vNetLayers = ["relu_l1", "pool_l7", "relu_l8", "relu_l9", "relu_l10"]
         middles = ["rf", "param", "landmark"]
 
         # Get similarity functions
