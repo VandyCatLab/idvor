@@ -1,7 +1,6 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Model, load_model
-import tensorflow.keras.backend as K
 import sys, os
 import glob
 import pandas as pd
@@ -9,8 +8,9 @@ import numba as nb
 import itertools
 import re
 import json
-
-from tensorflow.python.ops.gen_array_ops import parallel_concat
+import ecoset
+import utilities
+import gc
 
 
 sys.path.append("../imported_code/svcca")
@@ -478,6 +478,75 @@ def get_model_from_args(args, return_model=True, modelType="seed"):
         model.compile(metrics=["top_k_categorical_accuracy"])
         print(f"Model loaded: resnet101", flush=True)
         return model, "resnet101", "."
+    elif hasattr(args, "model_name") and args.model_name == "AlexNet":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for AlexNet.")
+        else:
+            weightPath = f"../models/AlexNet/ILSVRC_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch89"
+        # Load AlexNet
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath, output_shape=1000, softmax=False
+        )
+
+        print(f"Model loaded: AlexNet", flush=True)
+        return model, f"AlexNet{seed:02d}", "."
+    elif hasattr(args, "model_name") and args.model_name == "AlexNetEcoset":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for AlexNet.")
+        else:
+            weightPath = f"../models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch89"
+
+        # Load AlexNet
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath, output_shape=565, softmax=False
+        )
+
+        print(f"Model loaded: AlexNet (ecoset)", flush=True)
+        return model, f"AlexNetEcoset{seed:02d}", "."
+    elif hasattr(args, "model_name") and args.model_name == "vNet":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for vNet.")
+        else:
+            weightPath = f"../models/vNET/ILSVRC_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch79"
+        # Load vNet
+        model = ecoset.make_vNet(
+            weights_path=weightPath,
+            softmax=False,
+            input_shape=(128, 128, 3),
+            output_shape=1000,
+            data_format="channels_last",
+        )
+
+        print(f"Model loaded: vNet", flush=True)
+        return model, f"vNet{seed:02d}", "."
+    elif hasattr(args, "model_name") and args.model_name == "vNetEcoset":
+        # Find the seed from args
+        seed = args.model_seed
+
+        if seed == -1:
+            raise ValueError("Seed must be specified for vNet.")
+        else:
+            weightPath = f"../models/vNET/ecoset_training_seeds_01_to_10/training_seed_{seed:02d}/model.ckpt_epoch79"
+        # Load vNet
+        model = ecoset.make_vNet(
+            weights_path=weightPath,
+            softmax=False,
+            input_shape=(128, 128, 3),
+            output_shape=565,
+            data_format="channels_last",
+        )
+
+        print(f"Model loaded: vNet (ecoset)", flush=True)
+        return model, f"vNetEcoset{seed:02d}", "."
     elif hasattr(args, "model_dir"):
         # List models in model_dir
         modelList = glob.glob(os.path.join(args.model_dir, "*.pb"))
@@ -520,14 +589,14 @@ def get_funcs(method="all"):
             preprocess_peaRsaNumba,
             preprocess_eucRsaNumba,
             preprocess_speRsaNumba,
-            preprocess_svcca,
+            preprocess_pwcca,
             preprocess_ckaNumba,
         ]
         simFuns = [
             do_rsaNumba,
             do_rsaNumba,
             do_rsaNumba,
-            do_svcca,
+            do_pwcca,
             do_linearCKANumba2,
         ]
         analysisNames = ["peaRsa", "eucRsa", "speRsa", "cca", "cka"]
@@ -905,6 +974,9 @@ if __name__ == "__main__":
             "seedSimMat",
             "itemSimMat",
             "layerMatch",
+            "ecosetModelSims",
+            "ecosetDataSims",
+            "ecosetCrossSims",
             "matchedSimilarity",
             "bigModelSims",
         ],
@@ -913,7 +985,18 @@ if __name__ == "__main__":
         "--model_name",
         type=str,
         help="Model name to load",
-        choices=["vgg", "resnet", "vgg16", "vgg19", "resnet50", "resnet101"],
+        choices=[
+            "vgg",
+            "resnet",
+            "vgg16",
+            "vgg19",
+            "resnet50",
+            "resnet101",
+            "vNet",
+            "vNetEcoset",
+            "AlexNet",
+            "AlexNetEcoset",
+        ],
     )
     parser.add_argument(
         "--model_index",
@@ -925,6 +1008,9 @@ if __name__ == "__main__":
         "--shuffle_seed", type=int, help="shuffle seed of the main model"
     )
     parser.add_argument("--weight_seed", type=int, help="weight seed of the main model")
+    parser.add_argument(
+        "--model_seed", type=int, default=-1, help="seed for the ecoset models"
+    )
     parser.add_argument(
         "--model_seeds",
         type=str,
@@ -992,15 +1078,25 @@ if __name__ == "__main__":
 
         preprocFuns, simFuns, analysisNames = get_funcs(args.simSet)
 
-        # Get model
-        _, modelName, _ = get_model_from_args(args, return_model=False)
-        modelName = modelName.split(".")[0]
+        if args.model_name in ["vNet", "AlexNet"]:
+            modelName = args.model_name
 
-        # List model representations and make combinations
-        reps = glob.glob(args.reps_dir + "/*")
-        reps = [rep.split("/")[-1] for rep in reps if "w" in rep and "s" in rep]
-        repCombos = list(itertools.combinations(reps, 2))
-        repCombos = [x for x in repCombos if x[0] == modelName]
+            # Filter for the specific models
+            reps = glob.glob(os.path.join(args.reps_dir, f"{modelName}*"))
+            reps = [rep.split("/")[-1] for rep in reps]
+
+            repCombos = list(itertools.combinations(reps, 2))
+        else:
+            # Get model
+            _, modelName, _ = get_model_from_args(args, return_model=False)
+            modelName = modelName.split(".")[0]
+
+            # List model representations and make combinations
+            reps = glob.glob(args.reps_dir + "/*")
+            reps = [rep.split("/")[-1] for rep in reps if "w" in rep and "s" in rep]
+
+            repCombos = list(itertools.combinations(reps, 2))
+            repCombos = [x for x in repCombos if x[0] == modelName]
 
         # Prepare dataframes
         if args.output_dir is not None:
@@ -1053,8 +1149,17 @@ if __name__ == "__main__":
             model, modelName, _ = get_model_from_args(args, return_model=True)
 
             # Rescale dataset if needed
-            if args.model_name in ["vgg16", "vgg19", "resnet50", "resnet101"]:
+            if args.model_name in [
+                "vgg16",
+                "vgg19",
+                "resnet50",
+                "resnet101",
+                "AlexNet",
+                "AlexNetEcoset",
+            ]:
                 dataset = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+            elif args.model_name in ["vNet", "vNetEcoset"]:
+                dataset = tf.keras.preprocessing.image.smart_resize(dataset, (128, 128))
 
             # Find all the layers with relu
             modelInput = model.input
@@ -1063,13 +1168,20 @@ if __name__ == "__main__":
                 modelOuts = [
                     (i, layer.output)
                     for i, layer in enumerate(model.layers)
-                    if hasattr(layer, "activation")
-                    and layer.activation.__name__ == "relu"
+                    if (
+                        hasattr(layer, "activation")
+                        and layer.activation.__name__ == "relu"
+                    )
+                    or isinstance(layer, tf.keras.layers.ReLU)
                 ]
             else:
                 print("Getting representations for specified layers", flush=True)
                 args.layer_index = [int(x) for x in args.layer_index]
                 modelOuts = [(i, model.layers[i].output) for i in args.layer_index]
+
+            # Check if the reps_dir exists
+            if not os.path.exists(args.reps_dir):
+                os.makedirs(args.reps_dir)
 
             for i, layer in modelOuts:
                 outPath = os.path.join(args.reps_dir, f"{modelName}l{i}.npy")
@@ -1078,8 +1190,16 @@ if __name__ == "__main__":
                     continue
 
                 # VGG is so big it has to be done on CPU but at least we have huge memory
-                device = "/CPU:0" if args.model_name in ["vgg16", "vgg19"] else "/GPU:1"
-                batchSize = 512 if args.model_name in ["vgg16", "vgg19"] else 32
+                device = (
+                    "/CPU:0"
+                    if args.model_name in ["vgg16", "vgg19", "vNet", "vNetEcoset"]
+                    else "/GPU:1"
+                )
+                batchSize = (
+                    512
+                    if args.model_name in ["vgg16", "vgg19", "vNet", "vNetEcoset"]
+                    else 32
+                )
                 with tf.device(device):
                     tmpModel = Model(modelInput, layer)
                     rep = tmpModel.predict(dataset, batch_size=batchSize)
@@ -1193,6 +1313,498 @@ if __name__ == "__main__":
         simDf.to_csv(
             f"../outputs/masterOutput/similarities/matchedSim-{args.model_name}.csv"
         )
+    elif args.analysis == "ecosetDataSims":
+        preprocessFuns, simFuns, simNames = get_funcs(args.simSet)
+
+        # Find reps based on model_name
+        repDirs = glob.glob(os.path.join(args.reps_dir, f"{args.model_name}*"))
+
+        # Split repDirs based on if they have ecoset in the name
+        ecosetRepDirs = [rep for rep in repDirs if "Ecoset" in rep]
+        nonEcosetRepDirs = [rep for rep in repDirs if "Ecoset" not in rep]
+
+        # Make combos of ecoset and non-ecoset
+        repCombos = list(itertools.product(ecosetRepDirs, nonEcosetRepDirs))
+
+        # Get layers
+        layers = [
+            int(layer.split("l")[-1].split(".npy")[0])
+            for layer in glob.glob(f"{repDirs[0]}/*")
+        ]
+        layers.sort()
+        # Create dataframe to hold data
+        simDf = pd.DataFrame()
+
+        # Loop through layers
+        for layerIdx in range(len(glob.glob(f"{repDirs[0]}/*"))):
+            # Loop through combos
+            for ecosetRepDir, nonEcosetRepDir in repCombos:
+                print(
+                    f"Working on layer {layers[layerIdx]} between {ecosetRepDir} and {nonEcosetRepDir}"
+                )
+
+                # Load ecosetReps
+                ecosetReps = glob.glob(
+                    os.path.join(ecosetRepDir, f"{args.model_name}*.npy")
+                )
+                ecosetReps.sort()
+                ecosetReps = np.load(ecosetReps[layerIdx])
+
+                # Load non ecoset reps
+                nonEcosetReps = glob.glob(
+                    os.path.join(nonEcosetRepDir, f"{args.model_name}*.npy")
+                )
+                nonEcosetReps.sort()
+                nonEcosetReps = np.load(nonEcosetReps[layerIdx])
+
+                # Get similarities
+                simDict = multi_analysis(
+                    ecosetReps,
+                    nonEcosetReps,
+                    preprocessFuns,
+                    simFuns,
+                    names=simNames,
+                    verbose=True,
+                )
+
+                # Save data to dataframe
+                simDf = pd.concat(
+                    (
+                        simDf,
+                        pd.DataFrame(
+                            {
+                                "ecoset": [ecosetRepDir.split("/")[-1]],
+                                "nonEcoset": [nonEcosetRepDir.split("/")[-1]],
+                                "layer": [layers[layerIdx]],
+                                **simDict,
+                            }
+                        ),
+                    )
+                )
+
+        # Save dataframe
+        if args.output_dir is None:
+            simDf.to_csv(
+                f"../outputs/masterOutput/similarities/{args.model_name}_ecosetDataSims.csv"
+            )
+        else:
+            if not os.path.exists(args.output_dir):
+                os.makedirs(args.output_dir)
+            simDf.to_csv(
+                os.path.join(args.output_dir, f"{args.model_name}_ecosetDataSims.csv")
+            )
+    elif args.analysis == "ecosetModelSims":
+        preprocFuns, simFuns, simNames = get_funcs(args.simSet)
+
+        # Find reps based on model_name
+        repDirs = glob.glob(os.path.join(args.reps_dir, f"{args.model_name}*"))
+        repDirs.sort()
+
+        # Loop through layers
+        for layerIdx in range(len(glob.glob(f"{repDirs[0]}/*"))):
+            for preprocFun, simFun, simName in zip(preprocFuns, simFuns, simNames):
+                print(f"Working on layer {layerIdx} with {simFun.__name__}")
+                # Get the layer for each model
+                reps = []
+                for repDir in repDirs:
+                    layers = glob.glob(os.path.join(repDir, "*.npy"))
+                    layers.sort()
+                    rep = np.load(layers[layerIdx])
+                    rep = np.expand_dims(rep, axis=0)
+
+                    reps += [rep]
+
+                reps = np.concatenate(reps, axis=0)
+
+                # Preallocate a similarity matrix
+                simMat = np.zeros(shape=(len(repDirs), len(repDirs)))
+                for i in range(len(repDirs)):
+                    for j in range(i, len(repDirs)):
+                        print(f"Comparing {repDirs[i]} and {repDirs[j]}", flush=True)
+                        simMat[i, j] = simFun(preprocFun(reps[i]), preprocFun(reps[j]))
+                        simMat[j, i] = simMat[i, j]
+
+                if args.output_dir is None:
+                    np.save(
+                        f"../outputs/masterOutput/similarities/{args.model_name}_simMat_l{layerIdx}_{simName}.npy",
+                        simMat,
+                    )
+                else:
+                    if not os.path.exists(args.output_dir):
+                        os.makedirs(args.output_dir)
+                    np.save(
+                        os.path.join(
+                            args.output_dir,
+                            f"{args.model_name}simMat_l{layerIdx}_{simName}.npy",
+                        ),
+                        simMat,
+                    )
+
+    elif args.analysis == "ecosetCrossSims":
+        alexNetLayers = ["pool1", "conv4", "fc6", "pool5", "fc7"]
+        vNetLayers = ["relu_l1", "pool_l7", "relu_l8", "relu_l9", "relu_l10"]
+        middles = ["rf", "param", "landmark"]
+
+        # Get similarity functions
+        preprocFuns, simFuns, simNames = get_funcs(args.simSet)
+
+        # Imagenet directory
+        datasetDir = "/data/ImageNet/sortedVal"
+        # List categories
+        cats = os.listdir(datasetDir)
+
+        nRepeats = 50
+
+        # Prepare model dirs
+        imagenetAlexNets = glob.glob(
+            os.path.join(
+                "../models/AlexNet/ILSVRC_training_seeds_01_to_10", f"training_seed_*"
+            )
+        )
+        ecosetAlexNets = glob.glob(
+            os.path.join(
+                "../models/AlexNet/ecoset_training_seeds_01_to_10", f"training_seed_*"
+            )
+        )
+        imagenetvNets = glob.glob(
+            os.path.join(
+                "../models/vNET/ILSVRC_training_seeds_01_to_10", f"training_seed_*"
+            )
+        )
+        ecosetvNets = glob.glob(
+            os.path.join(
+                "../models/vNET/ecoset_training_seeds_01_to_10", f"training_seed_*"
+            )
+        )
+        imagenetAlexNets.sort()
+        ecosetAlexNets.sort()
+        imagenetvNets.sort()
+        ecosetvNets.sort()
+
+        # Setup dataframe for data
+        df = pd.DataFrame(
+            columns=[
+                "repeat",
+                "AlexNetSeed",
+                "AlexNetDataset",
+                "vNetSeed",
+                "vNetDataset",
+                "layer",
+            ]
+            + simNames
+        )
+        # Loop through repeats
+        for i in range(nRepeats):
+            # Outfile
+            if args.output_dir is None:
+                outFile = (
+                    f"../outputs/masterOutput/similarities/ecosetCrossSims_{i}.csv"
+                )
+            else:
+                outFile = os.path.join(args.output_dir, f"ecosetCrossSims_{i}.csv")
+
+            # Check if outfile exists
+            if os.path.exists(outFile):
+                print(f"Repeat {i} already exists, skipping", flush=True)
+                continue
+
+            print(f"Working on repeat {i+1} of {nRepeats}")
+
+            # Preallocate image array
+            images = np.zeros(shape=(len(cats), 224, 224, 3), dtype="float32")
+            # Randomly select one image from each category
+            for j, cat in enumerate(cats):
+                # List images
+                catImages = os.listdir(os.path.join(datasetDir, cat))
+
+                # Randomly select one
+                image = np.random.choice(catImages)
+
+                # Load image
+                image = tf.keras.utils.load_img(
+                    os.path.join(datasetDir, cat, image),
+                    target_size=(224, 224),
+                    keep_aspect_ratio=True,
+                )
+
+                # Preprocess image (function is same for all big models)
+                image = tf.keras.applications.vgg16.preprocess_input(
+                    np.expand_dims(image, axis=0)
+                )
+
+                # Save images
+                images[j] = image
+
+            # First work on AlexNets
+            alexNetReps = {
+                "early": np.array([]),
+                "rf": np.array([]),
+                "param": np.array([]),
+                "landmark": np.array([]),
+                "late": np.array([]),
+            }
+            for alexNet in imagenetAlexNets:
+                # Load model
+                model = ecoset.make_alex_net_v2(
+                    output_shape=1000,
+                    weights_path=os.path.join(alexNet, "model.ckpt_epoch89"),
+                )
+
+                # Rebuild outputs
+                outs = [model.get_layer(layer).output for layer in alexNetLayers]
+                model = Model(inputs=model.input, outputs=outs)
+
+                reps = utilities.manual_gpu_batch(model, images, 32)
+
+                for key, rep in zip(alexNetReps.keys(), reps):
+                    # Apply global average pooling if needed
+                    if len(rep.shape) == 4:
+                        rep = np.mean(rep, axis=(1, 2))
+
+                    # Expand dimension for rep
+                    rep = np.expand_dims(rep, axis=0)
+
+                    if alexNetReps[key].size == 0:
+                        alexNetReps[key] = rep
+                    else:
+                        alexNetReps[key] = np.concatenate(
+                            (alexNetReps[key], rep), axis=0
+                        )
+
+            # Now do the same for ecoset AlexNets
+            for alexNet in ecosetAlexNets:
+                # Load model
+                model = ecoset.make_alex_net_v2(
+                    output_shape=565,
+                    weights_path=os.path.join(alexNet, "model.ckpt_epoch89"),
+                )
+
+                # Rebuild outputs
+                outs = [model.get_layer(layer).output for layer in alexNetLayers]
+                model = Model(inputs=model.input, outputs=outs)
+
+                reps = utilities.manual_gpu_batch(model, images, 32)
+
+                for key, rep in zip(alexNetReps.keys(), reps):
+                    # Apply global average pooling if needed
+                    if len(rep.shape) == 4:
+                        rep = np.mean(rep, axis=(1, 2))
+
+                    # Expand dimension for rep
+                    rep = np.expand_dims(rep, axis=0)
+
+                    alexNetReps[key] = np.concatenate((alexNetReps[key], rep), axis=0)
+
+            # Resize images for vNet
+            images = tf.keras.preprocessing.image.smart_resize(images, (128, 128))
+
+            # Now do the same for vNets
+            vNetReps = {
+                "early": np.array([]),
+                "rf": np.array([]),
+                "param": np.array([]),
+                "landmark": np.array([]),
+                "late": np.array([]),
+            }
+            vNetKeys = list(vNetReps.keys())
+            for vNet in imagenetvNets:
+                del model
+                gc.collect()
+                tf.keras.backend.clear_session()
+
+                # Load model
+                model = ecoset.make_vNet(
+                    output_shape=1000,
+                    input_shape=(128, 128, 3),
+                    weights_path=os.path.join(vNet, "model.ckpt_epoch79"),
+                    data_format="channels_last",
+                )
+
+                # Rebuild model
+                outs = [model.get_layer(layer).output for layer in vNetLayers]
+                model = Model(inputs=model.input, outputs=outs)
+
+                reps = utilities.manual_gpu_batch(model, images, 4)
+
+                for key, rep in zip(vNetKeys, reps):
+                    # Apply global average pooling if needed
+                    if len(rep.shape) == 4:
+                        rep = np.mean(rep, axis=(1, 2))
+
+                    # Expand dimension for rep
+                    rep = np.expand_dims(rep, axis=0)
+
+                    if vNetReps[key].size == 0:
+                        vNetReps[key] = rep
+                    else:
+                        vNetReps[key] = np.concatenate((vNetReps[key], rep), axis=0)
+
+            # Now do the same for ecoset vNets
+            for vNet in ecosetvNets:
+                del model
+                gc.collect()
+                tf.keras.backend.clear_session()
+
+                # Load model
+                model = ecoset.make_vNet(
+                    output_shape=565,
+                    input_shape=(128, 128, 3),
+                    weights_path=os.path.join(vNet, "model.ckpt_epoch79"),
+                    data_format="channels_last",
+                )
+
+                # Rebuild model
+                outs = [model.get_layer(layer).output for layer in vNetLayers]
+                model = Model(inputs=model.input, outputs=outs)
+
+                reps = utilities.manual_gpu_batch(model, images, 4)
+
+                for key, rep in zip(vNetKeys, reps):
+                    # Apply global average pooling if needed
+                    if len(rep.shape) == 4:
+                        rep = np.mean(rep, axis=(1, 2))
+
+                    # Expand dimension for rep
+                    rep = np.expand_dims(rep, axis=0)
+
+                    vNetReps[key] = np.concatenate((vNetReps[key], rep), axis=0)
+
+            # Now do the similarity calculations
+            vNetReps = alexNetReps
+
+            # Work on each type of layer
+            for key in alexNetReps.keys():
+                # Working on within Imagenet dataset models first
+                for alexNetIdx, vNetIdx in itertools.product(range(10), range(10)):
+                    print(
+                        f"Working on AlexNet model {alexNetIdx + 1} and vNet model {vNetIdx + 1} for the {key} layer",
+                        flush=True,
+                    )
+                    comboSims = multi_analysis(
+                        alexNetReps[key][alexNetIdx],
+                        vNetReps[key][vNetIdx],
+                        preprocFuns,
+                        simFuns,
+                        names=simNames,
+                    )
+
+                    # Save data to dataframe
+                    df = pd.concat(
+                        (
+                            df,
+                            pd.DataFrame(
+                                {
+                                    "repeat": [i],
+                                    "AlexNetSeed": [alexNetIdx + 1],
+                                    "AlexNetDataset": ["Imagenet"],
+                                    "vNetSeed": [vNetIdx + 1],
+                                    "vNetDataset": ["Imagenet"],
+                                    "layer": [key],
+                                    **comboSims,
+                                }
+                            ),
+                        )
+                    )
+
+                for alexNetIdx, vNetIdx in itertools.product(
+                    range(10, 20), range(10, 20)
+                ):
+                    print(
+                        f"Working on AlexNet model {alexNetIdx + 1} and vNet model {vNetIdx + 1} for the {key} layer",
+                        flush=True,
+                    )
+                    comboSims = multi_analysis(
+                        alexNetReps[key][alexNetIdx],
+                        vNetReps[key][vNetIdx],
+                        preprocFuns,
+                        simFuns,
+                        names=simNames,
+                    )
+
+                    # Save data to dataframe
+                    df = pd.concat(
+                        (
+                            df,
+                            pd.DataFrame(
+                                {
+                                    "repeat": [i],
+                                    "AlexNetSeed": [alexNetIdx + 1],
+                                    "AlexNetDataset": ["Ecoset"],
+                                    "vNetSeed": [vNetIdx + 1],
+                                    "vNetDataset": ["Ecoset"],
+                                    "layer": [key],
+                                    **comboSims,
+                                }
+                            ),
+                        )
+                    )
+
+                # Now work on cross dataset comparisons
+                for alexNetIdx, vNetIdx in itertools.product(range(10), range(10, 20)):
+                    print(
+                        f"Working on AlexNet model {alexNetIdx + 1} and vNet model {vNetIdx + 1} for the {key} layer",
+                        flush=True,
+                    )
+                    comboSims = multi_analysis(
+                        alexNetReps[key][alexNetIdx],
+                        vNetReps[key][vNetIdx],
+                        preprocFuns,
+                        simFuns,
+                        names=simNames,
+                    )
+
+                    # Save data to dataframe
+                    df = pd.concat(
+                        (
+                            df,
+                            pd.DataFrame(
+                                {
+                                    "repeat": [i],
+                                    "AlexNetSeed": [alexNetIdx + 1],
+                                    "AlexNetDataset": ["Imagenet"],
+                                    "vNetSeed": [vNetIdx + 1],
+                                    "vNetDataset": ["Ecoset"],
+                                    "layer": [key],
+                                    **comboSims,
+                                }
+                            ),
+                        )
+                    )
+
+                for alexNetIdx, vNetIdx in itertools.product(range(10, 20), range(10)):
+                    print(
+                        f"Working on AlexNet model {alexNetIdx + 1} and vNet model {vNetIdx + 1} for the {key} layer",
+                        flush=True,
+                    )
+                    comboSims = multi_analysis(
+                        alexNetReps[key][alexNetIdx],
+                        vNetReps[key][vNetIdx],
+                        preprocFuns,
+                        simFuns,
+                        names=simNames,
+                    )
+
+                    # Save data to dataframe
+                    df = pd.concat(
+                        (
+                            df,
+                            pd.DataFrame(
+                                {
+                                    "repeat": [i],
+                                    "AlexNetSeed": [alexNetIdx + 1],
+                                    "AlexNetDataset": ["Ecoset"],
+                                    "vNetSeed": [vNetIdx + 1],
+                                    "vNetDataset": ["Imagenet"],
+                                    "layer": [key],
+                                    **comboSims,
+                                }
+                            ),
+                        )
+                    )
+
+                # Save dataframe
+                df.to_csv(outFile)
+
     elif args.analysis == "bigModelSims":
         layerNames = {
             "vgg16": ["block1_pool", "fc1", "fc2"],
@@ -1255,9 +1867,13 @@ if __name__ == "__main__":
             # Get representations from important layers of VGG16
             model = tf.keras.applications.VGG16(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["vgg16"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
@@ -1273,9 +1889,13 @@ if __name__ == "__main__":
             # Get representations from important layers of VGG19
             model = tf.keras.applications.VGG19(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["vgg19"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
@@ -1290,9 +1910,13 @@ if __name__ == "__main__":
             # Get representations from important layers of ResNet50
             model = tf.keras.applications.ResNet50(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["resnet50"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)
@@ -1307,9 +1931,13 @@ if __name__ == "__main__":
             # Get representations from important layers of ResNet101
             model = tf.keras.applications.ResNet101(include_top=True)
             modelOutputs = [
-                tf.keras.layers.GlobalAveragePooling2D()(model.get_layer(layer).output)
-                if len(model.get_layer(layer).output.shape) > 2
-                else model.get_layer(layer).output
+                (
+                    tf.keras.layers.GlobalAveragePooling2D()(
+                        model.get_layer(layer).output
+                    )
+                    if len(model.get_layer(layer).output.shape) > 2
+                    else model.get_layer(layer).output
+                )
                 for layer in layerNames["resnet101"]
             ]
             model = Model(inputs=model.input, outputs=modelOutputs)

@@ -13,6 +13,7 @@ from tensorflow.keras.datasets import cifar10
 import analysis, datasets
 import pandas as pd
 import os
+import json
 from scipy.stats import norm
 
 
@@ -333,8 +334,11 @@ def yield_big_transforms(
 ):
     """Unlike previous function, this one acts on preprocessed images array."""
     origShape = dataset.shape
-    with tf.device("/cpu:0"):
-        ds = tf.keras.preprocessing.image.smart_resize(dataset, (224, 224))
+    with tf.device("/gpu"):
+        inputShape = model.layers[0].output_shape[0][1:3][0]
+        ds = tf.keras.preprocessing.image.smart_resize(
+            dataset, (inputShape, inputShape)
+        )
         ds = preproc_fun(ds)
 
     # Set model to output reps at selected layer
@@ -344,8 +348,8 @@ def yield_big_transforms(
     model = Model(inputs=inp, outputs=out)
 
     # Get reps for originals
-    with tf.device("/cpu:0"):
-        rep1 = model.predict(ds, verbose=0)
+    with tf.device("/cpu"):
+        rep1 = model(ds, training=False)
 
     if len(rep1.shape) == 4:
         rep1 = np.mean(rep1, axis=(1, 2))
@@ -436,12 +440,13 @@ def yield_big_transforms(
         numImgs = ds.shape[0]
         for v in range(versions):
             # Random scale
-            with tf.device("/cpu:0"):
+            with tf.device("/cpu"):
+                print("Creating dataset")
                 size = np.random.randint(options["scaleLow"], options["scaleHigh"] + 1)
                 ds = tf.image.resize(dataset, (size, size))
 
                 # Random crop, note that this will crop everything together
-                ds = tf.image.random_crop(ds, (numImgs, 224, 224, 3))
+                ds = tf.image.random_crop(ds, (numImgs, inputShape, inputShape, 3))
 
                 # Maybe flip images
                 if np.random.rand() > 0.5:
@@ -452,13 +457,73 @@ def yield_big_transforms(
                 color = np.matmul(eigVecs, alphas * eigVals)
                 color = np.concatenate(
                     [
-                        np.tile(color[0], (224, 224, 1)),
-                        np.tile(color[1], (224, 224, 1)),
-                        np.tile(color[2], (224, 224, 1)),
+                        np.tile(color[0], (inputShape, inputShape, 1)),
+                        np.tile(color[1], (inputShape, inputShape, 1)),
+                        np.tile(color[2], (inputShape, inputShape, 1)),
                     ],
                     axis=2,
                 )
                 ds = ds + color
+
+            # Make representations
+            print("Getting reps")
+            # Manual batch
+            reps = []
+            for i in range(0, ds.shape[0], 32):
+                with tf.device("/gpu"):
+                    reps += [model(ds[i : i + 32], training=False)]
+            with tf.device("/cpu"):
+                rep2 = tf.concat(reps, axis=0)
+
+            if len(rep2.shape) == 4:
+                rep2 = np.mean(rep2, axis=(1, 2))
+
+            yield v, rep1, rep2
+    elif "randomOptions":
+        print(f" - Yielding {versions} repeats.")
+        numImgs = ds.shape[0]
+        for v in range(versions):
+            # Random scale
+            with tf.device("/cpu:0"):
+                if "scaleLow" in options and "scaleHigh" in options:
+                    size = np.random.randint(
+                        options["scaleLow"], options["scaleHigh"] + 1
+                    )
+                    if "verbose" in options and options["verbose"]:
+                        print(f"Scaling to {size}.")
+
+                    ds = tf.image.resize(dataset, (size, size))
+                    print(ds.shape)
+
+                    # Random crop, note that this will crop everything together
+                    ds = tf.image.random_crop(ds, (numImgs, inputShape, inputShape, 3))
+                    print(ds.shape)
+                else:  # If this is not set, just resize as necessary
+                    ds = tf.image.resize(dataset, (inputShape, inputShape))
+
+                # Maybe flip images
+                if "flipChance" in options:
+                    if np.random.rand() > options["flipChance"]:
+                        if "verbose" in options and options["verbose"]:
+                            print(f"Flipping with chance {options['flipChance']}.")
+                        ds = tf.image.flip_left_right(ds)
+
+                # Random color
+                if "colorScale" in options:
+                    if "verbose" in options and options["verbose"]:
+                        print(f"Color shifting with scale {options['colorScale']}.")
+
+                    alphas = np.random.normal(scale=options["colorScale"], size=3)
+                    color = np.matmul(eigVecs, alphas * eigVals)
+                    color = np.concatenate(
+                        [
+                            np.tile(color[0], (inputShape, inputShape, 1)),
+                            np.tile(color[1], (inputShape, inputShape, 1)),
+                            np.tile(color[2], (inputShape, inputShape, 1)),
+                        ],
+                        axis=2,
+                    )
+                    ds = ds + color
 
             # Make representations
             with tf.device("/cpu:0"):
@@ -572,6 +637,7 @@ if __name__ == "__main__":
             "accuracy",
             "maxAug",
             "random",
+            "randomOptions",
         ],
     )
     parser.add_argument("--model_name", type=str, help="name of model to load")
@@ -585,6 +651,12 @@ if __name__ == "__main__":
         "--shuffle_seed", type=int, help="shuffle seed of the main model"
     )
     parser.add_argument("--weight_seed", type=int, help="weight seed of the main model")
+    parser.add_argument(
+        "--model_seed",
+        type=int,
+        default=-1,
+        help="model seed to select the model from the ecoset models",
+    )
     parser.add_argument(
         "--model_seeds",
         type=str,
@@ -625,6 +697,7 @@ if __name__ == "__main__":
         help="number of augmentation versions",
         default=None,
     )
+    parser.add_argument("--options", "-o", type=json.loads, default={})
     parser.add_argument(
         "--version_slice",
         type=float,
@@ -802,14 +875,24 @@ if __name__ == "__main__":
                     print(f"{outPath} already exists, skipping.", flush=True)
         elif args.analysis == "random":
             for layer in args.layer_index:
-                print(f"Working on layer {layer}.", flush=True)
+                try:
+                    layer = int(layer)
+                    print(f"Working on layer {layer}.", flush=True)
+                except ValueError:
+                    # Look for the layer string in the model
+                    layer = [
+                        i for i, name in enumerate(model.layers) if name.name == layer
+                    ]
+                    layer = layer[0]
+                    print(f"Working on layer {model.layers[layer].name}.", flush=True)
+
                 # Get transforms generators
                 if modelName in ["vgg", "vgg16", "vgg19"]:
                     transforms = yield_big_transforms(
                         "random",
                         model,
                         lambda x: x,
-                        int(layer),
+                        layer,
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 256, "scaleHigh": 512},
@@ -819,16 +902,36 @@ if __name__ == "__main__":
                         "random",
                         model,
                         lambda x: x,
-                        int(layer),
+                        layer,
                         dataset,
                         versions=args.versions,
                         options={"scaleLow": 256, "scaleHigh": 480},
+                    )
+                elif "AlexNet" in modelName:
+                    transforms = yield_big_transforms(
+                        "random",
+                        model,
+                        lambda x: x,
+                        layer,
+                        dataset,
+                        versions=args.versions,
+                        options={"scaleLow": 256, "scaleHigh": 480},
+                    )
+                elif "vNet" in modelName:
+                    transforms = yield_big_transforms(
+                        "random",
+                        model,
+                        lambda x: x,
+                        layer,
+                        dataset,
+                        versions=args.versions,
+                        options={"scaleLow": 140, "scaleHigh": 224},
                     )
                 else:
                     transforms = yield_transforms(
                         args.analysis,
                         model,
-                        int(layer),
+                        layer,
                         dataset,
                         return_aug=False,
                         versions=args.versions,
@@ -854,6 +957,98 @@ if __name__ == "__main__":
                             analysisNames,
                             verbose=True,
                         )
+
+                        # Save similarity into dataframe
+                        simDf = pd.concat(
+                            [
+                                simDf,
+                                pd.DataFrame(
+                                    [[v] + [sims[fun] for fun in sims.keys()]],
+                                    columns=["repeat"] + analysisNames,
+                                ),
+                            ]
+                        )
+
+                    # Save
+                    simDf.to_csv(outPath, index=False)
+                else:
+                    print(f"{outPath} already exists, skipping.", flush=True)
+        elif args.analysis == "randomOptions":
+            for layer in args.layer_index:
+                print(f"Working on layer {layer}.", flush=True)
+                # Get transforms generators
+                if modelName in ["vgg", "vgg16", "vgg19"]:
+                    transforms = yield_big_transforms(
+                        "randomOptions",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options=args.options,
+                    )
+                elif modelName in ["resnet", "resnet50", "resnet101"]:
+                    transforms = yield_big_transforms(
+                        "randomOptions",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options=args.options,
+                    )
+                elif "AlexNet" in modelName:
+                    transforms = yield_big_transforms(
+                        "randomOptions",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options=args.options,
+                    )
+                elif "vNet" in modelName:
+                    transforms = yield_big_transforms(
+                        "randomOptions",
+                        model,
+                        lambda x: x,
+                        int(layer),
+                        dataset,
+                        versions=args.versions,
+                        options=args.options,
+                    )
+                else:
+                    transforms = yield_transforms(
+                        args.analysis,
+                        model,
+                        int(layer),
+                        dataset,
+                        return_aug=False,
+                        versions=args.versions,
+                        options=args.options,
+                    )
+
+                # Create dataframe
+                simDf = pd.DataFrame(columns=["repeat"] + analysisNames)
+
+                outPath = os.path.join(
+                    basePath,
+                    f"{modelName.split('.')[0]}l{layer}-{args.analysis}{'-repeat'+str(args.version_slice) if args.version_slice is not None else ''}.csv",
+                )
+
+                if not os.path.exists(outPath):
+                    # Get similarity measure per transform
+                    for v, rep1, rep2 in transforms:
+                        # Calculate similarity for each direction
+                        sims = analysis.multi_analysis(
+                            rep1,
+                            rep2,
+                            preprocFuns,
+                            simFuns,
+                            analysisNames,
+                            verbose=True,
+                        )
+                        print(sims)
 
                         # Save similarity into dataframe
                         simDf = pd.concat(
